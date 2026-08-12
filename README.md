@@ -50,7 +50,7 @@ The Version 1 architecture is intentionally **not multi-agent**. Multi-agent orc
 * **Jyothi Kiran** — Provider Abstraction & Tool Execution
 * **Koushik** — Watchdog & Anomaly Detection
 * **Sayan** — Web/API Platform & Gateway Interface
-* **Harshit** — Frontend, Dashboard & Monitoring Platform
+* **Harshith** — Frontend, Dashboard & Monitoring Platform
 
 ## Project Status
 
