@@ -1,76 +1,108 @@
-# NexusFlow
+# Pathway-Powered Agentic Gateway
 
-**Pathway-Powered Agentic Gateway**
+A provider-agnostic AI orchestration gateway designed to demonstrate production-oriented AI infrastructure through event-driven execution, independent workflow monitoring, real-time state management, and observable agent execution.
 
-NexusFlow is a provider-agnostic AI orchestration gateway designed to sit between client applications and AI providers.
+The gateway sits between client applications and LLM providers and treats agent activity as a continuous event stream rather than transient in-memory state.
 
-The goal is to build a reliable AI infrastructure layer that captures agent activity as a real-time event stream and independently monitors that stream for workflow anomalies.
-
-## Version 1
-
-Version 1 focuses on building the core gateway infrastructure with a **single AI agent**.
-
-The initial architecture is:
-
-```text
-Client
-   ↓
-Gateway / API
-   ↓
-AI Provider + Tool Execution
-   ↓
-Pathway Event Stream
-   ↓
-Watchdog / Monitoring
-```
-
-The watchdog operates independently from the main request path and monitors events for problems such as:
-
-* Reasoning loops
-* Repeated tool calls
-* Timeouts
-* Other workflow anomalies
-
-The Version 1 architecture is intentionally **not multi-agent**. Multi-agent orchestration is planned as a future extension.
-
-## Initial Technology Stack
-
-* Python
-* Pathway
-* Node.js
-* TypeScript
-* WebSockets
-* React
-* LLM Provider APIs
-* Docker / Redis / Prometheus / Grafana as the project evolves
-
-## Team
-
-* **Dinesh** — Architecture, Pathway Integration & Orchestration
-* **Jyothi Kiran** — Provider Abstraction & Tool Execution
-* **Koushik** — Watchdog & Anomaly Detection
-* **Sayan** — Web/API Platform & Gateway Interface
-* **Harshith** — Frontend, Dashboard & Monitoring Platform
+---
 
 ## Project Status
 
-**Version 1 — Starting**
+**Version 1 — Architecture, Documentation & Repository Preparation**
 
-Coding begins on **August 15, 2026**.
+The repository structure and engineering documentation are currently being established.
 
-The repository will evolve incrementally as the architecture, services, event schemas, APIs, watchdog, and monitoring components are implemented.
+Implementation begins after the Version 1 baseline is finalized.
 
-## Vision
+---
 
-NexusFlow aims to demonstrate production-oriented AI infrastructure rather than simply building another chatbot.
+## Problem Statement
 
-The long-term direction includes:
+Most AI agent systems work effectively in demonstrations but become difficult to operate reliably in production.
 
-* Multiple AI providers
-* Multi-agent orchestration
-* Checkpoint-based recovery
-* Fault tolerance
-* Real-time telemetry
-* Chaos testing
-* Horizontal scalability
-* Production deployment
+Common problems include:
+
+- Reasoning loops
+- Repeated tool calls
+- Tool execution failures
+- Request timeouts
+- Loss of state during concurrent execution
+- Poor observability
+- Lack of independent workflow monitoring
+- Difficult recovery from failed execution
+- Tight coupling between orchestration and monitoring
+
+The objective of this project is to build an **AI orchestration gateway** that addresses these infrastructure problems without being tied to a specific LLM provider.
+
+Instead of treating an agent's execution history as temporary application state, the system represents execution activity as a **real-time event stream**.
+
+This allows independent components such as the watchdog and telemetry system to observe execution without blocking or modifying the primary request-processing path.
+
+---
+
+# System Architecture
+
+```text
+                         Client Application
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │ REST / WebSocket API   │
+                    │      Sayan             │
+                    └───────────┬────────────┘
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │      Gateway Core      │
+                    │        Dinesh           │
+                    └───────────┬────────────┘
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │    Orchestration       │
+                    │        Dinesh           │
+                    └───────────┬────────────┘
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │ Provider Abstraction    │
+                    │        Jyothi           │
+                    └───────────┬────────────┘
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │    LLM / Tool Layer     │
+                    │        Jyothi           │
+                    └───────────┬────────────┘
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │     Event Generation    │
+                    │   Shared Event Schema   │
+                    └───────────┬────────────┘
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │   Pathway Event Stream  │
+                    │        Dinesh           │
+                    └───────────┬────────────┘
+                                │
+                 ┌──────────────┴──────────────┐
+                 │                             │
+                 ▼                             ▼
+      ┌────────────────────┐       ┌────────────────────┐
+      │      Watchdog      │       │ State / Monitoring │
+      │      Koushik       │       │                    │
+      └─────────┬──────────┘       └─────────┬──────────┘
+                │                            │
+                ▼                            ▼
+      ┌────────────────────┐       ┌────────────────────┐
+      │      Alerts        │       │     Telemetry      │
+      └─────────┬──────────┘       │      Harshit       │
+                │                  └─────────┬──────────┘
+                └──────────────┬────────────┘
+                               ▼
+                    ┌────────────────────────┐
+                    │       Dashboard        │
+                    │   Sayan + Harshit      │
+                    └────────────────────────┘
