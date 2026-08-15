@@ -1,76 +1,108 @@
-# NexusFlow
+# Pathway-Powered Agentic Gateway
 
-**Pathway-Powered Agentic Gateway**
+## Project Overview
+The Pathway-Powered Agentic Gateway is a provider-agnostic AI orchestration gateway. It sits between client applications and LLM providers to manage an AI agent's reasoning process by capturing activity as a real-time event stream. An independent, asynchronous watchdog monitors this stream for anomalies like loops, timeouts, and repeated tool calls without blocking the main request path.
 
-NexusFlow is a provider-agnostic AI orchestration gateway designed to sit between client applications and AI providers.
+**Current Project Status:** Architecture/documentation/repository preparation phase — implementation has not yet been started.
 
-The goal is to build a reliable AI infrastructure layer that captures agent activity as a real-time event stream and independently monitors that stream for workflow anomalies.
+## Problem Statement & Motivation
+Most agent frameworks work well in demos but fail in production due to unreliable agent state, reasoning loops, repeated tool calls, timeouts, loss of state under concurrency, and poor observability. This leads to fragile orchestration and a lack of independent workflow monitoring. The core objective of this gateway is to treat agent activity as a continuous, recorded event stream rather than transient memory, allowing independent monitoring without interfering with request execution.
 
-## Version 1
-
-Version 1 focuses on building the core gateway infrastructure with a **single AI agent**.
-
-The initial architecture is:
-
+## System Architecture (Event-Driven)
 ```text
 Client
    ↓
-Gateway / API
+REST / WebSocket API
    ↓
-AI Provider + Tool Execution
+Gateway
+   ↓
+Single-Agent Orchestration
+   ↓
+Provider Abstraction
+   ↓
+LLM Provider
+   ↓
+Tool Execution
+   ↓
+Event Generation
    ↓
 Pathway Event Stream
    ↓
-Watchdog / Monitoring
+ ┌─────────────────────┐
+ │                     │
+ ▼                     ▼
+Watchdog          State/Monitoring
+ │                     │
+ ▼                     ▼
+Alerts             Telemetry
+                       │
+                       ▼
+                   Dashboard
 ```
 
-The watchdog operates independently from the main request path and monitors events for problems such as:
+**Architecture Flow:**
+- **Gateway** handles the main request path.
+- **Provider Abstraction** allows provider independence.
+- **Tool Execution** handles tool calls.
+- **Pathway** acts as the real-time event-stream/state backbone.
+- **Events** provide the shared system contract.
+- **Watchdog** independently consumes the event stream and must not block the main request-processing path.
+- **Alerts** flow into monitoring/telemetry.
+- **Dashboard** visualizes system state, events, metrics, and alerts.
 
-* Reasoning loops
-* Repeated tool calls
-* Timeouts
-* Other workflow anomalies
+## Version 1 Scope
+**Version 1 is a SINGLE-AGENT AI ORCHESTRATION GATEWAY.**
+*Note: Version 1 is strictly single-agent. The existence of multiple engineering subsystems does not make it a multi-agent system.*
+- Core gateway routing.
+- One live AI provider via provider abstraction.
+- Single-agent orchestration and tool execution (async).
+- Pathway event streaming and state/event management via event schema.
+- Independent watchdog for reasoning-loop detection, repeated tool-call detection, timeout detection, and workflow anomaly detection.
+- REST API and WebSocket communication.
+- Chat client and dashboard showing request latency, event throughput, and watchdog alert visualization.
+- Telemetry/alert aggregation.
+- Restart/recovery and end-to-end integration demonstration.
 
-The Version 1 architecture is intentionally **not multi-agent**. Multi-agent orchestration is planned as a future extension.
+## Version 1 Exclusions
+- Multiple live AI providers.
+- Multi-agent workflows.
+- Advanced checkpoint recovery.
+- Full containerized deployment automation.
+- Structured chaos testing.
+- Horizontal scalability.
 
-## Initial Technology Stack
+## Version 2 Roadmap
+- Multiple interchangeable AI providers and dynamic provider routing.
+- Multi-agent workflows.
+- Checkpoint-based recovery.
+- Structured chaos testing.
+- Horizontal scalability and containerized deployment.
+- Advanced telemetry, richer alert history, and state-graph visualization.
 
-* Python
-* Pathway
-* Node.js
-* TypeScript
-* WebSockets
-* React
-* LLM Provider APIs
-* Docker / Redis / Prometheus / Grafana as the project evolves
+## Technology Stack
+- **AI Infrastructure/Watchdog:** Python, asyncio, Pathway.
+- **Web/API Platform:** Node.js, TypeScript, REST, WebSockets.
+- **Frontend:** React, WebSocket client.
+- **Telemetry Service:** Java (Optional, strictly scoped to telemetry).
 
-## Team
+## Team Contribution Model & Repository Structure
+The repository is organized by software architecture, not by team members.
+- `src/` - Core AI, orchestration, event, and watchdog logic.
+- `services/` - Independent API and telemetry services.
+- `frontend/` - Client and dashboard UI.
+- `tests/` - System and end-to-end testing.
+- `docs/` - Architectural documentation.
+- `logs/` - Progress logging.
+- `reference/` - Reference materials.
 
-* **Dinesh** — Architecture, Pathway Integration & Orchestration
-* **Jyothi Kiran** — Provider Abstraction & Tool Execution
-* **Koushik** — Watchdog & Anomaly Detection
-* **Sayan** — Web/API Platform & Gateway Interface
-* **Harshit** — Frontend, Dashboard & Monitoring Platform
+**Ownership:** See `CONTRIBUTION_GUIDE.md` for explicit team assignments.
 
-## Project Status
+## Logging Strategy
+- `experimental_log.md` for architectural experiments, decisions, and benchmarks.
+- `logs/log.md` for tracking meaningful implementation progress.
 
-**Version 1 — Starting**
+## Git Workflow
+Branch-based development (e.g., `feature/gateway`). See `docs/git-workflow/README.md`.
 
-Coding begins on **August 15, 2026**.
-
-The repository will evolve incrementally as the architecture, services, event schemas, APIs, watchdog, and monitoring components are implemented.
-
-## Vision
-
-NexusFlow aims to demonstrate production-oriented AI infrastructure rather than simply building another chatbot.
-
-The long-term direction includes:
-
-* Multiple AI providers
-* Multi-agent orchestration
-* Checkpoint-based recovery
-* Fault tolerance
-* Real-time telemetry
-* Chaos testing
-* Horizontal scalability
-* Production deployment
+## Testing Strategy
+Subsystem testing by component owners; E2E integration testing coordinated across modules. See `docs/testing/README.md`.\n
