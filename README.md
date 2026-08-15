@@ -54,25 +54,25 @@ This allows independent components such as the watchdog and telemetry system to 
                                 ▼
                     ┌────────────────────────┐
                     │      Gateway Core      │
-                    │        Dinesh           │
+                    │        Dinesh          │
                     └───────────┬────────────┘
                                 │
                                 ▼
                     ┌────────────────────────┐
                     │    Orchestration       │
-                    │        Dinesh           │
+                    │        Dinesh          │
                     └───────────┬────────────┘
                                 │
                                 ▼
                     ┌────────────────────────┐
-                    │ Provider Abstraction    │
-                    │        Jyothi           │
+                    │ Provider Abstraction   │
+                    │        Jyothi          │
                     └───────────┬────────────┘
                                 │
                                 ▼
                     ┌────────────────────────┐
-                    │    LLM / Tool Layer     │
-                    │        Jyothi           │
+                    │    LLM / Tool Layer    │
+                    │        Jyothi          │
                     └───────────┬────────────┘
                                 │
                                 ▼
@@ -83,8 +83,8 @@ This allows independent components such as the watchdog and telemetry system to 
                                 │
                                 ▼
                     ┌────────────────────────┐
-                    │   Pathway Event Stream  │
-                    │        Dinesh           │
+                    │   Pathway Event Stream │
+                    │        Dinesh          │
                     └───────────┬────────────┘
                                 │
                  ┌──────────────┴──────────────┐
