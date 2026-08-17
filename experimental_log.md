@@ -5,100 +5,224 @@ This file records engineering experiments, architecture decisions, rejected appr
 ## Entries
 
 ### Date: 2026-08-15
+
 **Experiment / Decision:**
 Repository Architecture Restructuring
 
 **Context:**
-The initial repository structure organized directories by individual team members.
+The initial repository structure organized directories around individual team members.
 
 **Problem:**
-A production-style GitHub repository should represent software architecture rather than developer ownership.
+A production-oriented repository should represent system architecture rather than developer ownership.
 
-**Initial approach:**
+**Initial Approach:**
 Developer-specific directories.
 
 **Decision:**
-Refactor the repository so physical directories represent system components.
+Refactor the repository so physical directories represent system components:
 
-**New architectural organization:**
-- `src/`
-- `services/`
-- `frontend/`
-- `tests/`
-- `docs/`
-- `logs/`
-- `reference/`
+* `src/`
+* `services/`
+* `frontend/`
+* `tests/`
+* `docs/`
+* `logs/`
+* `reference/`
 
-**Ownership mechanism:**
+**Ownership Mechanism:**
 `CONTRIBUTION_GUIDE.md`
 
 **Reason:**
-Separate software architecture from team ownership and make the repository suitable for collaborative Git-based development.
+Separate software architecture from team ownership while maintaining explicit ownership boundaries for collaborative Git development.
 
 **Impact:**
-The repository now looks like a coherent solo-developed software project while maintaining explicit team ownership documentation.
+The repository now represents the software architecture directly while ownership remains documented separately.
 
 ---
 
 ### Date: 2026-08-16
+
 **Experiment / Decision:**
-Watchdog Day 1 Prototype & Anomaly Detection Architecture
+Gateway and Orchestrator Foundation Scaffolding
 
 **Context:**
-The Watchdog subsystem (owned by Koushik) requires independent event-stream observation to detect orchestration anomalies (e.g., repeated tool calls, reasoning loops, timeouts).
+The first implementation day required establishing the physical boundaries for Gateway and Orchestration according to the ownership defined in `CONTRIBUTION_GUIDE.md`.
 
 **Problem:**
-Tight coupling of anomaly checks inside the primary orchestration path would introduce latency, increase request failure risk, and obscure execution telemetry.
+The team needed to begin implementation without prematurely coupling the Gateway to the REST API, provider implementations, or Watchdog.
 
-**Initial approach:**
-Inline anomaly checking within orchestrator loops vs. decoupled event-stream analysis.
+**Initial Approach:**
+Keep `src/gateway/` and `src/orchestration/` as README-only placeholders.
 
 **Decision:**
-Implement an independent `Watchdog` component ([`src/watchdog/detector.py`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/src/watchdog/detector.py)) that consumes event dicts without modifying gateway execution state.
+Created minimal Python module boundaries:
 
-**Key Prototype Results & Scope:**
-- Defined core monitoring signals (`request_id`, `event_type`, `timestamp`, `tool_name`, `status`, `session_id`, `tool_call_id`) and anomaly specs in [`docs/watchdog/monitoring-signals.md`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/docs/watchdog/monitoring-signals.md).
-- Implemented `collections.Counter`-based repeated tool-call detection flagging repetitions at threshold >= 5.
-- Structured standard anomaly alert dict payload: `{"request_id": ..., "anomaly_type": "repeated_tool_call", "tool_name": ..., "count": ...}`.
-- Added executable mock event driver ([`detector.py:L35-L84`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/src/watchdog/detector.py#L35-L84)) demonstrating alert generation across 5 sequential mock events.
+* `src/gateway/__init__.py`
+* `src/gateway/router.py`
+* `src/orchestration/__init__.py`
+* `src/orchestration/executor.py`
+
+The initial implementation was intentionally skeletal and used `TODO` markers rather than introducing concrete REST frameworks, provider implementations, or persistence mechanisms.
 
 **Reason:**
-Establishes a functional, non-blocking proof-of-concept for anomaly detection prior to integration with Pathway event stream and Dinesh's final event schema.
+Establish clear ownership and integration boundaries before defining the shared event and execution contracts.
 
 **Impact:**
-Validated Day 1 Watchdog feasibility; ready for integration with Pathway event ingestion and alert aggregation services.
+The Gateway and Orchestration layers now have explicit implementation boundaries for the subsequent event-driven execution flow.
+
+---
+
+### Date: 2026-08-16
+
+**Experiment / Decision:**
+API Service — REST/WebSocket Skeleton
+
+**Context:**
+`services/api` is the communication boundary between client applications and the Gateway.
+
+**Problem:**
+The team needed a running API foundation without prematurely finalizing Gateway integration or event schemas.
+
+**Initial Approach:**
+Review the Gateway and API architecture and establish the expected flow:
+
+`Client / Dashboard → API → Gateway → Orchestration`
+
+**Decision:**
+Initialized `services/api` as a Node.js + TypeScript service using Express and `ws`.
+
+Implemented:
+
+* `GET /health` — working
+* `POST /execute` — initial stub
+* `GET /status/:execution_id` — initial stub
+* WebSocket upgrade handling for `/stream/:execution_id`
+
+Gateway forwarding, request validation, status lookup, and event emission were intentionally left for later integration.
+
+**Reason:**
+Provide Sayan with an independently runnable API boundary while allowing the Gateway and event contracts to stabilize independently.
+
+**Impact:**
+The API service can now serve as the integration boundary between external clients and the Python Gateway.
 
 ---
 
 ### Date: 2026-08-17
+
 **Experiment / Decision:**
-Watchdog Day 2 — Adaptation to Dinesh's Initial Event Format
+Provider Abstraction and Tool Execution Foundation
 
 **Context:**
-The Day 1 Watchdog prototype used an initial event representation and needed to be adapted to the event structure now available from Dinesh's implementation.
+The provider and tool subsystems required stable interfaces that could be consumed by the Gateway and Orchestration layers without coupling orchestration logic to a specific LLM provider.
 
-**Work Completed:**
-- Adapted [`Watchdog.process_event()`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/src/watchdog/detector.py) to safely parse Dinesh's current event payload representation (`ToolResult.to_event_payload()`).
-- Preserved existing `collections.Counter` repeated-tool-call detection logic and threshold configuration (>= 5 calls).
-- Added dedicated test suite [`tests/test_watchdog.py`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/tests/test_watchdog.py) validating normal tool call execution, repeated-call detection, request isolation, and non-tool event filtering.
+**Problem:**
+The project needed provider and tool contracts for integration testing without introducing live vendor SDK dependencies or production routing complexity.
+
+**Decision:**
+Implemented a lightweight provider abstraction and asynchronous tool execution foundation.
+
+**Provider Layer:**
+
+* `BaseLLMProvider`
+* `LLMMessage`
+* `ToolCall`
+* `LLMResponse`
+* `ProviderConfig`
+* `MockProvider`
+
+**Tool Layer:**
+
+* `BaseTool`
+* `ToolRegistry`
+* `ToolExecutor`
+* `ToolResult`
+* `CalculatorTool`
+* `EchoTool`
+
+`ToolResult.to_event_payload()` provides structured execution information compatible with downstream event consumers.
+
+**Reason:**
+Keep the provider/tool subsystem implementation-independent and allow the Gateway/Orchestrator to interact through stable interfaces.
+
+**Scope Deliberately Deferred:**
+
+* Live vendor SDK integration
+* Dynamic provider routing
+* Provider fallback
+* Production tool routing
+* Multi-agent execution
+* Full Pathway streaming
 
 **Validation:**
-```text
-python -m pytest tests/test_watchdog.py -v
-5 passed in 0.03s
-```
-- `test_ignore_non_tool_called_events`: PASSED (non-tool events ignored)
-- `test_integration_with_tool_result_to_event_payload`: PASSED (integration with `ToolResult.to_event_payload()`)
-- `test_normal_tool_calls_no_alert`: PASSED (normal tool calls below threshold produce no alert)
-- `test_repeated_tool_calls_triggers_alert`: PASSED (repeated tool calls at threshold trigger alert)
-- `test_request_isolation`: PASSED (independent request tracking without cross-contamination)
-
-**Scope Limitations:**
-Day 2 explicitly did NOT implement:
-- Timeout detection
-- Repeating workflow / sequence loop detection
-- Additional anomaly types or scoring algorithms
-- Changes to Dinesh's shared event schema or other teammate subsystems
+The provider and tool subsystem tests passed with 17 tests.
 
 **Impact:**
-The existing Watchdog repeated-tool-call prototype is now fully validated against Dinesh's current event representation and ready for Pathway event stream integration.
+The provider/tool subsystem provides a clean execution boundary for Gateway and Orchestration integration.
+
+---
+
+### Date: 2026-08-17
+
+**Experiment / Decision:**
+Gateway, Orchestration, and Event Contract Foundation — Day 2
+
+**Context:**
+The Gateway and Orchestration layers required a stable event-driven contract so that execution state and lifecycle information could be consumed by the API, Watchdog, and telemetry systems without coupling those systems to internal orchestration logic.
+
+**Problem:**
+The team needed an operational Gateway → Orchestrator → Provider/Tool execution path while avoiding premature introduction of distributed streaming, persistent state, or additional infrastructure.
+
+**Decision:**
+
+1. **Gateway lifecycle ownership**
+
+   * Gateway owns request-level lifecycle events such as request receipt and final execution status.
+
+2. **Orchestration lifecycle ownership**
+
+   * Orchestrator owns execution-level and provider/tool execution events.
+
+3. **Structured event contract**
+
+   * Events use a common structured schema containing lifecycle information and execution metadata.
+   * The event contract is intended to be consumed independently by the Watchdog, API layer, and telemetry components.
+
+4. **Single-owner execution state**
+
+   * Execution state is managed through a dedicated `StateManager`.
+   * The Day 2 implementation uses in-memory state.
+
+5. **Temporary event-stream implementation**
+
+   * `EventStream` currently provides an in-memory event-stream abstraction.
+   * It is treated as an integration boundary rather than the final streaming infrastructure.
+
+6. **Pathway integration deferred**
+
+   * Full Pathway-based streaming is intentionally deferred until the Gateway/Event contract is stable.
+   * The Day 2 implementation therefore does not introduce Pathway-specific assumptions into the core orchestration interfaces.
+
+**Implementation Result:**
+
+The following execution path is operational:
+
+`Gateway → Orchestrator → Mock Provider/Tool Execution → EventStream → StateManager`
+
+Structured lifecycle events are emitted during execution, providing the initial contract for downstream consumers.
+
+**Reason:**
+Stabilize the execution and event contracts before introducing the full streaming implementation. This minimizes coupling and allows Koushik's Watchdog, Sayan's API layer, and Harshit's telemetry components to integrate against defined interfaces.
+
+**Validation:**
+The repository test suite passed with 19 tests.
+
+**Deferred Work:**
+
+* Full Pathway event-stream integration
+* REST/WebSocket → Gateway integration
+* Advanced execution-state persistence and recovery
+* Expanded retry and multi-turn execution states
+
+**Impact:**
+The Day 2 implementation establishes the first operational Gateway/Orchestration execution path and provides the event and state contracts required for subsequent subsystem integration.
