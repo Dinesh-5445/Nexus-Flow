@@ -36,75 +36,69 @@ Refactor the repository so physical directories represent system components.
 Separate software architecture from team ownership and make the repository suitable for collaborative Git-based development.
 
 **Impact:**
-The repository now looks like a coherent solo-developed software project while maintaining explicit team ownership documentation.\n
+The repository now looks like a coherent solo-developed software project while maintaining explicit team ownership documentation.
 
+---
 
 ### Date: 2026-08-16
 **Experiment / Decision:**
-API Service — REST/WebSocket Skeleton
+Watchdog Day 1 Prototype & Anomaly Detection Architecture
 
 **Context:**
-`services/api` is the primary REST and WebSocket interface between the client/dashboard and the Gateway. Before today it contained only a README.
+The Watchdog subsystem (owned by Koushik) requires independent event-stream observation to detect orchestration anomalies (e.g., repeated tool calls, reasoning loops, timeouts).
 
 **Problem:**
-The team needed a minimal, running foundation for the API layer — validated against the Gateway's expected request shape and the planned WebSocket event flow — without finalizing schemas or building real Gateway integration yet.
+Tight coupling of anomaly checks inside the primary orchestration path would introduce latency, increase request failure risk, and obscure execution telemetry.
 
 **Initial approach:**
-Reviewed the API and Gateway READMEs to map the request flow (Client/Dashboard → API → Gateway → Orchestration)
+Inline anomaly checking within orchestrator loops vs. decoupled event-stream analysis.
 
 **Decision:**
-Initialized `services/api` as a Node.js + TypeScript project (Express + `ws`). Built a minimal skeleton:
-- `GET /health` — working
-- `POST /execute` — stubbed (TODO: validation, Gateway forwarding)
-- `GET /status/:execution_id` — stubbed (TODO: status lookup)
-- WebSocket upgrade handling on `/stream/:execution_id` — connects and logs, no event emission yet
+Implement an independent `Watchdog` component ([`src/watchdog/detector.py`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/src/watchdog/detector.py)) that consumes event dicts without modifying gateway execution state.
 
-No Gateway integration or schema finalization done yet, per agreement — foundation only.
+**Key Prototype Results & Scope:**
+- Defined core monitoring signals (`request_id`, `event_type`, `timestamp`, `tool_name`, `status`, `session_id`, `tool_call_id`) and anomaly specs in [`docs/watchdog/monitoring-signals.md`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/docs/watchdog/monitoring-signals.md).
+- Implemented `collections.Counter`-based repeated tool-call detection flagging repetitions at threshold >= 5.
+- Structured standard anomaly alert dict payload: `{"request_id": ..., "anomaly_type": "repeated_tool_call", "tool_name": ..., "count": ...}`.
+- Added executable mock event driver ([`detector.py:L35-L84`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/src/watchdog/detector.py#L35-L84)) demonstrating alert generation across 5 sequential mock events.
+
+**Reason:**
+Establishes a functional, non-blocking proof-of-concept for anomaly detection prior to integration with Pathway event stream and Dinesh's final event schema.
 
 **Impact:**
-`services/api` now boots and exposes the interface shape the rest of the team can build against.
+Validated Day 1 Watchdog feasibility; ready for integration with Pathway event ingestion and alert aggregation services.
 
+---
 
 ### Date: 2026-08-17
 **Experiment / Decision:**
-Provider Abstraction Layer & Tool Execution Engine — Day 1 Foundation Prototype & Scope Audit
+Watchdog Day 2 — Adaptation to Dinesh's Initial Event Format
 
 **Context:**
-`src/providers/` and `src/tools/` define the core AI subsystem owned by Jyothi Kiran. Prior to Day 1, both directories contained only README documentation files.
+The Day 1 Watchdog prototype used an initial event representation and needed to be adapted to the event structure now available from Dinesh's implementation.
 
-**Problem:**
-Establish the minimal Day 1 foundation prototype for LLM provider abstraction and tool execution without premature over-engineering or implementing future-day scope. The goal is to define the necessary interfaces and understand the basic flows:
-- `LLM request → provider → response`
-- `Tool request → tool execution → result`
+**Work Completed:**
+- Adapted [`Watchdog.process_event()`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/src/watchdog/detector.py) to safely parse Dinesh's current event payload representation (`ToolResult.to_event_payload()`).
+- Preserved existing `collections.Counter` repeated-tool-call detection logic and threshold configuration (>= 5 calls).
+- Added dedicated test suite [`tests/test_watchdog.py`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/tests/test_watchdog.py) validating normal tool call execution, repeated-call detection, request isolation, and non-tool event filtering.
 
-**Files Inspected:**
-- `README.md`, `CONTRIBUTION_GUIDE.md`, `docs/architecture/README.md`, `docs/integration/README.md`
-- `src/gateway/router.py`, `src/orchestration/executor.py`, `src/watchdog/detector.py`, `docs/watchdog/monitoring-signals.md`
-- `services/api/src/index.ts`
+**Validation:**
+```text
+python -m pytest tests/test_watchdog.py -v
+5 passed in 0.03s
+```
+- `test_ignore_non_tool_called_events`: PASSED (non-tool events ignored)
+- `test_integration_with_tool_result_to_event_payload`: PASSED (integration with `ToolResult.to_event_payload()`)
+- `test_normal_tool_calls_no_alert`: PASSED (normal tool calls below threshold produce no alert)
+- `test_repeated_tool_calls_triggers_alert`: PASSED (repeated tool calls at threshold trigger alert)
+- `test_request_isolation`: PASSED (independent request tracking without cross-contamination)
 
-**Initial approach vs. Decision:**
-Avoided pulling in heavy external vendor SDKs (e.g. live OpenAI/Anthropic/Gemini SDKs), multi-agent routing, or complex persistence layers on Day 1. Instead, built a clean, decoupled foundation using Python's standard library and asyncio:
-1. **Provider Abstraction (`src/providers/base.py`, `src/providers/mock_provider.py`):**
-   - `BaseLLMProvider`: Abstract base class defining `async def generate(messages, tools, **kwargs) -> LLMResponse`.
-   - `LLMMessage`, `ToolCall`, `LLMResponse`: Normalized dataclass contracts for messages, tool requests, and model responses.
-   - `ProviderConfig`: Environment-based configuration loader to prevent hardcoded secrets.
-   - `MockProvider`: Deterministic mock provider supporting predefined responses and predictable tool calling for offline testing.
-2. **Tool Execution Engine (`src/tools/base.py`, `src/tools/registry.py`, `src/tools/executor.py`, `src/tools/builtin.py`):**
-   - `BaseTool`: Abstract base class with JSON schema generator (`to_schema()`) and `async def execute(**kwargs)`.
-   - `ToolRegistry`: Simple in-memory registry for tool registration and schema lookup.
-   - `ToolExecutor`: Async tool execution engine with runtime timing, exception containment, and error reporting.
-   - `ToolResult`: Normalized execution output with `.to_event_payload()` producing event structures aligned with `docs/watchdog/monitoring-signals.md` and Koushik's `Watchdog`.
-   - Builtin prototype tools: `CalculatorTool` and `EchoTool` for pipeline validation.
+**Scope Limitations:**
+Day 2 explicitly did NOT implement:
+- Timeout detection
+- Repeating workflow / sequence loop detection
+- Additional anomaly types or scoring algorithms
+- Changes to Dinesh's shared event schema or other teammate subsystems
 
-**Scope Audit & Cleanup:**
-- **Audit Findings:** The core provider and tool prototype is lightweight and modular (~60-90 LOC per component) without premature dependencies.
-- **Cleanup Performed:** Removed the extraneous feature-specific log file (`logs/feature_provider_tools.md`) to maintain the two-file logging architecture (`experimental_log.md` for personal/branch log, `logs/log.md` for shared team log).
-- **Scope Preserved for Day 2+:** Intentionally deferred live vendor SDK integrations, production tool routing, dynamic provider fallback, and full Pathway streaming pipeline.
-
-**Tests & Validation:**
-- Ran `python -m unittest discover -s tests -p "test_*.py"` — 17 unit and integration tests passing.
-- Validated provider generation, mock tool triggering, tool registry, async executor error handling, and watchdog anomaly detection compatibility.
-
-**Impact & Current Status:**
-Day 1 foundation prototype is complete and verified. The orchestration layer (`src/orchestration`) has clean interfaces to build against on Day 2.
-
+**Impact:**
+The existing Watchdog repeated-tool-call prototype is now fully validated against Dinesh's current event representation and ready for Pathway event stream integration.
