@@ -1,4 +1,3 @@
-<<<<<<< Updated upstream
 # Experimental Log
 
 This file records engineering experiments, architecture decisions, rejected approaches, benchmarks, design investigations, and engineering observations.
@@ -6,193 +5,224 @@ This file records engineering experiments, architecture decisions, rejected appr
 ## Entries
 
 ### Date: 2026-08-15
+
 **Experiment / Decision:**
 Repository Architecture Restructuring
 
 **Context:**
-The initial repository structure organized directories by individual team members.
+The initial repository structure organized directories around individual team members.
 
 **Problem:**
-A production-style GitHub repository should represent software architecture rather than developer ownership.
+A production-oriented repository should represent system architecture rather than developer ownership.
 
-**Initial approach:**
+**Initial Approach:**
 Developer-specific directories.
 
 **Decision:**
-Refactor the repository so physical directories represent system components.
+Refactor the repository so physical directories represent system components:
 
-**New architectural organization:**
-- `src/`
-- `services/`
-- `frontend/`
-- `tests/`
-- `docs/`
-- `logs/`
-- `reference/`
+* `src/`
+* `services/`
+* `frontend/`
+* `tests/`
+* `docs/`
+* `logs/`
+* `reference/`
 
-**Ownership mechanism:**
+**Ownership Mechanism:**
 `CONTRIBUTION_GUIDE.md`
 
 **Reason:**
-Separate software architecture from team ownership and make the repository suitable for collaborative Git-based development.
+Separate software architecture from team ownership while maintaining explicit ownership boundaries for collaborative Git development.
 
 **Impact:**
-The repository now looks like a coherent solo-developed software project while maintaining explicit team ownership documentation.
+The repository now represents the software architecture directly while ownership remains documented separately.
+
+---
 
 ### Date: 2026-08-16
+
 **Experiment / Decision:**
 Gateway and Orchestrator Foundation Scaffolding
 
 **Context:**
-First coding day. Needed to establish where Gateway and Orchestration logic will live based on ownership defined in `CONTRIBUTION_GUIDE.md`. 
+The first implementation day required establishing the physical boundaries for Gateway and Orchestration according to the ownership defined in `CONTRIBUTION_GUIDE.md`.
 
 **Problem:**
-Need to start coding without premature architectural decisions, keeping things minimal and decoupled from other modules.
+The team needed to begin implementation without prematurely coupling the Gateway to the REST API, provider implementations, or Watchdog.
 
-**Initial approach:**
-Empty README placeholders in `src/gateway/` and `src/orchestration/`.
-
-**Decision:**
-Created minimal Python modules with placeholder logic:
-- `src/gateway/__init__.py` & `src/gateway/router.py` for routing.
-- `src/orchestration/__init__.py` & `src/orchestration/executor.py` for single-agent orchestration.
-Used `TODO`s instead of hardcoding architectures like REST frameworks or Provider layers.
-
-**Reason:**
-Prevents tight coupling on Day 1. Gives clear, structural boundaries for the Web/API platform to call into the Gateway, and for Provider/Watchdog components to hook into the Orchestrator.
-
-**Impact:**
-A starting foundation is in place. Next steps involve defining the Event Schema and API Contracts.\n
-=======
-# Experimental Log
-
-This file records engineering experiments, architecture decisions, rejected approaches, benchmarks, design investigations, and engineering observations.
-
-## Entries
-
-### Date: 2026-08-15
-**Experiment / Decision:**
-Repository Architecture Restructuring
-
-**Context:**
-The initial repository structure organized directories by individual team members.
-
-**Problem:**
-A production-style GitHub repository should represent software architecture rather than developer ownership.
-
-**Initial approach:**
-Developer-specific directories.
+**Initial Approach:**
+Keep `src/gateway/` and `src/orchestration/` as README-only placeholders.
 
 **Decision:**
-Refactor the repository so physical directories represent system components.
+Created minimal Python module boundaries:
 
-**New architectural organization:**
-- `src/`
-- `services/`
-- `frontend/`
-- `tests/`
-- `docs/`
-- `logs/`
-- `reference/`
+* `src/gateway/__init__.py`
+* `src/gateway/router.py`
+* `src/orchestration/__init__.py`
+* `src/orchestration/executor.py`
 
-**Ownership mechanism:**
-`CONTRIBUTION_GUIDE.md`
+The initial implementation was intentionally skeletal and used `TODO` markers rather than introducing concrete REST frameworks, provider implementations, or persistence mechanisms.
 
 **Reason:**
-Separate software architecture from team ownership and make the repository suitable for collaborative Git-based development.
+Establish clear ownership and integration boundaries before defining the shared event and execution contracts.
 
 **Impact:**
-The repository now looks like a coherent solo-developed software project while maintaining explicit team ownership documentation.\n
+The Gateway and Orchestration layers now have explicit implementation boundaries for the subsequent event-driven execution flow.
 
+---
 
 ### Date: 2026-08-16
+
 **Experiment / Decision:**
 API Service — REST/WebSocket Skeleton
 
 **Context:**
-`services/api` is the primary REST and WebSocket interface between the client/dashboard and the Gateway. Before today it contained only a README.
+`services/api` is the communication boundary between client applications and the Gateway.
 
 **Problem:**
-The team needed a minimal, running foundation for the API layer — validated against the Gateway's expected request shape and the planned WebSocket event flow — without finalizing schemas or building real Gateway integration yet.
+The team needed a running API foundation without prematurely finalizing Gateway integration or event schemas.
 
-**Initial approach:**
-Reviewed the API and Gateway READMEs to map the request flow (Client/Dashboard → API → Gateway → Orchestration)
+**Initial Approach:**
+Review the Gateway and API architecture and establish the expected flow:
+
+`Client / Dashboard → API → Gateway → Orchestration`
 
 **Decision:**
-Initialized `services/api` as a Node.js + TypeScript project (Express + `ws`). Built a minimal skeleton:
-- `GET /health` — working
-- `POST /execute` — stubbed (TODO: validation, Gateway forwarding)
-- `GET /status/:execution_id` — stubbed (TODO: status lookup)
-- WebSocket upgrade handling on `/stream/:execution_id` — connects and logs, no event emission yet
+Initialized `services/api` as a Node.js + TypeScript service using Express and `ws`.
 
-No Gateway integration or schema finalization done yet, per agreement — foundation only.
+Implemented:
+
+* `GET /health` — working
+* `POST /execute` — initial stub
+* `GET /status/:execution_id` — initial stub
+* WebSocket upgrade handling for `/stream/:execution_id`
+
+Gateway forwarding, request validation, status lookup, and event emission were intentionally left for later integration.
+
+**Reason:**
+Provide Sayan with an independently runnable API boundary while allowing the Gateway and event contracts to stabilize independently.
 
 **Impact:**
-`services/api` now boots and exposes the interface shape the rest of the team can build against.
+The API service can now serve as the integration boundary between external clients and the Python Gateway.
 
+---
 
 ### Date: 2026-08-17
+
 **Experiment / Decision:**
-Provider Abstraction Layer & Tool Execution Engine — Day 1 Foundation Prototype & Scope Audit
+Provider Abstraction and Tool Execution Foundation
 
 **Context:**
-`src/providers/` and `src/tools/` define the core AI subsystem owned by Jyothi Kiran. Prior to Day 1, both directories contained only README documentation files.
+The provider and tool subsystems required stable interfaces that could be consumed by the Gateway and Orchestration layers without coupling orchestration logic to a specific LLM provider.
 
 **Problem:**
-Establish the minimal Day 1 foundation prototype for LLM provider abstraction and tool execution without premature over-engineering or implementing future-day scope. The goal is to define the necessary interfaces and understand the basic flows:
-- `LLM request → provider → response`
-- `Tool request → tool execution → result`
+The project needed provider and tool contracts for integration testing without introducing live vendor SDK dependencies or production routing complexity.
 
-**Files Inspected:**
-- `README.md`, `CONTRIBUTION_GUIDE.md`, `docs/architecture/README.md`, `docs/integration/README.md`
-- `src/gateway/router.py`, `src/orchestration/executor.py`, `src/watchdog/detector.py`, `docs/watchdog/monitoring-signals.md`
-- `services/api/src/index.ts`
+**Decision:**
+Implemented a lightweight provider abstraction and asynchronous tool execution foundation.
 
-**Initial approach vs. Decision:**
-Avoided pulling in heavy external vendor SDKs (e.g. live OpenAI/Anthropic/Gemini SDKs), multi-agent routing, or complex persistence layers on Day 1. Instead, built a clean, decoupled foundation using Python's standard library and asyncio:
-1. **Provider Abstraction (`src/providers/base.py`, `src/providers/mock_provider.py`):**
-   - `BaseLLMProvider`: Abstract base class defining `async def generate(messages, tools, **kwargs) -> LLMResponse`.
-   - `LLMMessage`, `ToolCall`, `LLMResponse`: Normalized dataclass contracts for messages, tool requests, and model responses.
-   - `ProviderConfig`: Environment-based configuration loader to prevent hardcoded secrets.
-   - `MockProvider`: Deterministic mock provider supporting predefined responses and predictable tool calling for offline testing.
-2. **Tool Execution Engine (`src/tools/base.py`, `src/tools/registry.py`, `src/tools/executor.py`, `src/tools/builtin.py`):**
-   - `BaseTool`: Abstract base class with JSON schema generator (`to_schema()`) and `async def execute(**kwargs)`.
-   - `ToolRegistry`: Simple in-memory registry for tool registration and schema lookup.
-   - `ToolExecutor`: Async tool execution engine with runtime timing, exception containment, and error reporting.
-   - `ToolResult`: Normalized execution output with `.to_event_payload()` producing event structures aligned with `docs/watchdog/monitoring-signals.md` and Koushik's `Watchdog`.
-   - Builtin prototype tools: `CalculatorTool` and `EchoTool` for pipeline validation.
+**Provider Layer:**
 
-**Scope Audit & Cleanup:**
-- **Audit Findings:** The core provider and tool prototype is lightweight and modular (~60-90 LOC per component) without premature dependencies.
-- **Cleanup Performed:** Removed the extraneous feature-specific log file (`logs/feature_provider_tools.md`) to maintain the two-file logging architecture (`experimental_log.md` for personal/branch log, `logs/log.md` for shared team log).
-- **Scope Preserved for Day 2+:** Intentionally deferred live vendor SDK integrations, production tool routing, dynamic provider fallback, and full Pathway streaming pipeline.
+* `BaseLLMProvider`
+* `LLMMessage`
+* `ToolCall`
+* `LLMResponse`
+* `ProviderConfig`
+* `MockProvider`
 
-**Tests & Validation:**
-- Ran `python -m unittest discover -s tests -p "test_*.py"` — 17 unit and integration tests passing.
-- Validated provider generation, mock tool triggering, tool registry, async executor error handling, and watchdog anomaly detection compatibility.
+**Tool Layer:**
 
-**Impact & Current Status:**
-Day 1 foundation prototype is complete and verified. The orchestration layer (`src/orchestration`) has clean interfaces to build against on Day 2.
+* `BaseTool`
+* `ToolRegistry`
+* `ToolExecutor`
+* `ToolResult`
+* `CalculatorTool`
+* `EchoTool`
 
+`ToolResult.to_event_payload()` provides structured execution information compatible with downstream event consumers.
+
+**Reason:**
+Keep the provider/tool subsystem implementation-independent and allow the Gateway/Orchestrator to interact through stable interfaces.
+
+**Scope Deliberately Deferred:**
+
+* Live vendor SDK integration
+* Dynamic provider routing
+* Provider fallback
+* Production tool routing
+* Multi-agent execution
+* Full Pathway streaming
+
+**Validation:**
+The provider and tool subsystem tests passed with 17 tests.
+
+**Impact:**
+The provider/tool subsystem provides a clean execution boundary for Gateway and Orchestration integration.
+
+---
 
 ### Date: 2026-08-17
+
 **Experiment / Decision:**
 Gateway, Orchestration, and Event Contract Foundation — Day 2
 
 **Context:**
-The gateway and orchestration layers required an event-driven foundation to decouple them from the API layer and the Watchdog system.
+The Gateway and Orchestration layers required a stable event-driven contract so that execution state and lifecycle information could be consumed by the API, Watchdog, and telemetry systems without coupling those systems to internal orchestration logic.
 
 **Problem:**
-We needed to establish the first stable Gateway/Event contract and make the mocked execution flow operational without prematurely adding complex Pathway streaming or heavy state persistence.
+The team needed an operational Gateway → Orchestrator → Provider/Tool execution path while avoiding premature introduction of distributed streaming, persistent state, or additional infrastructure.
 
 **Decision:**
-- Gateway owns request-level lifecycle events.
-- Orchestrator owns execution/provider/tool lifecycle events.
-- Structured events are the shared contract between Gateway, Watchdog, API, and telemetry.
-- State is currently in-memory and has a single owner.
-- EventStream is currently an in-memory implementation.
-- Full Pathway streaming is intentionally deferred to a later integration step.
+
+1. **Gateway lifecycle ownership**
+
+   * Gateway owns request-level lifecycle events such as request receipt and final execution status.
+
+2. **Orchestration lifecycle ownership**
+
+   * Orchestrator owns execution-level and provider/tool execution events.
+
+3. **Structured event contract**
+
+   * Events use a common structured schema containing lifecycle information and execution metadata.
+   * The event contract is intended to be consumed independently by the Watchdog, API layer, and telemetry components.
+
+4. **Single-owner execution state**
+
+   * Execution state is managed through a dedicated `StateManager`.
+   * The Day 2 implementation uses in-memory state.
+
+5. **Temporary event-stream implementation**
+
+   * `EventStream` currently provides an in-memory event-stream abstraction.
+   * It is treated as an integration boundary rather than the final streaming infrastructure.
+
+6. **Pathway integration deferred**
+
+   * Full Pathway-based streaming is intentionally deferred until the Gateway/Event contract is stable.
+   * The Day 2 implementation therefore does not introduce Pathway-specific assumptions into the core orchestration interfaces.
+
+**Implementation Result:**
+
+The following execution path is operational:
+
+`Gateway → Orchestrator → Mock Provider/Tool Execution → EventStream → StateManager`
+
+Structured lifecycle events are emitted during execution, providing the initial contract for downstream consumers.
+
+**Reason:**
+Stabilize the execution and event contracts before introducing the full streaming implementation. This minimizes coupling and allows Koushik's Watchdog, Sayan's API layer, and Harshit's telemetry components to integrate against defined interfaces.
+
+**Validation:**
+The repository test suite passed with 19 tests.
+
+**Deferred Work:**
+
+* Full Pathway event-stream integration
+* REST/WebSocket → Gateway integration
+* Advanced execution-state persistence and recovery
+* Expanded retry and multi-turn execution states
 
 **Impact:**
-The Gateway → Orchestrator → Mock Execution pipeline is now operational and producing structured events. This establishes a clean contract that the rest of the team can build against.
->>>>>>> Stashed changes
+The Day 2 implementation establishes the first operational Gateway/Orchestration execution path and provides the event and state contracts required for subsequent subsystem integration.
