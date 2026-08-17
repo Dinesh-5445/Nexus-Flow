@@ -67,3 +67,38 @@ Establishes a functional, non-blocking proof-of-concept for anomaly detection pr
 
 **Impact:**
 Validated Day 1 Watchdog feasibility; ready for integration with Pathway event ingestion and alert aggregation services.
+
+---
+
+### Date: 2026-08-17
+**Experiment / Decision:**
+Watchdog Day 2 — Adaptation to Dinesh's Initial Event Format
+
+**Context:**
+The Day 1 Watchdog prototype used an initial event representation and needed to be adapted to the event structure now available from Dinesh's implementation.
+
+**Work Completed:**
+- Adapted [`Watchdog.process_event()`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/src/watchdog/detector.py) to safely parse Dinesh's current event payload representation (`ToolResult.to_event_payload()`).
+- Preserved existing `collections.Counter` repeated-tool-call detection logic and threshold configuration (>= 5 calls).
+- Added dedicated test suite [`tests/test_watchdog.py`](file:///c:/Users/koushik/Desktop/pythonprojects/Nexus-Flow/tests/test_watchdog.py) validating normal tool call execution, repeated-call detection, request isolation, and non-tool event filtering.
+
+**Validation:**
+```text
+python -m pytest tests/test_watchdog.py -v
+5 passed in 0.03s
+```
+- `test_ignore_non_tool_called_events`: PASSED (non-tool events ignored)
+- `test_integration_with_tool_result_to_event_payload`: PASSED (integration with `ToolResult.to_event_payload()`)
+- `test_normal_tool_calls_no_alert`: PASSED (normal tool calls below threshold produce no alert)
+- `test_repeated_tool_calls_triggers_alert`: PASSED (repeated tool calls at threshold trigger alert)
+- `test_request_isolation`: PASSED (independent request tracking without cross-contamination)
+
+**Scope Limitations:**
+Day 2 explicitly did NOT implement:
+- Timeout detection
+- Repeating workflow / sequence loop detection
+- Additional anomaly types or scoring algorithms
+- Changes to Dinesh's shared event schema or other teammate subsystems
+
+**Impact:**
+The existing Watchdog repeated-tool-call prototype is now fully validated against Dinesh's current event representation and ready for Pathway event stream integration.

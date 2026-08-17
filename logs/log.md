@@ -36,4 +36,13 @@ This file records meaningful implementation/development progress.
 
 - **Harshit (Frontend / Dashboard / Telemetry):**
   - *Not verified in current repository* — `frontend/client/`, `frontend/dashboard/`, and `services/telemetry/` remain as architectural directory placeholders and documentation.
+
+### Date: 2026-08-17 (Day 2 Watchdog Progress)
+
+- **Koushik (Watchdog / Anomaly Detection):**
+  - Adapted `Watchdog.process_event()` in `src/watchdog/detector.py` to process Dinesh's event format (`ToolResult.to_event_payload()`).
+  - Retained `collections.Counter` repeated tool-call detection logic (threshold: 5 calls).
+  - Created unit test suite `tests/test_watchdog.py` validating 5/5 test cases (normal calls, repeated call alert, request isolation, event schema integration, non-tool event filtering).
+  - Preserved scope; no timeout/workflow pattern detection added and no shared event schema or teammate code modified.
+
 \n
