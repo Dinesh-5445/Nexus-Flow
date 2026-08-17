@@ -63,3 +63,48 @@ No Gateway integration or schema finalization done yet, per agreement — founda
 
 **Impact:**
 `services/api` now boots and exposes the interface shape the rest of the team can build against.
+
+
+### Date: 2026-08-17
+**Experiment / Decision:**
+Provider Abstraction Layer & Tool Execution Engine — Day 1 Foundation Prototype & Scope Audit
+
+**Context:**
+`src/providers/` and `src/tools/` define the core AI subsystem owned by Jyothi Kiran. Prior to Day 1, both directories contained only README documentation files.
+
+**Problem:**
+Establish the minimal Day 1 foundation prototype for LLM provider abstraction and tool execution without premature over-engineering or implementing future-day scope. The goal is to define the necessary interfaces and understand the basic flows:
+- `LLM request → provider → response`
+- `Tool request → tool execution → result`
+
+**Files Inspected:**
+- `README.md`, `CONTRIBUTION_GUIDE.md`, `docs/architecture/README.md`, `docs/integration/README.md`
+- `src/gateway/router.py`, `src/orchestration/executor.py`, `src/watchdog/detector.py`, `docs/watchdog/monitoring-signals.md`
+- `services/api/src/index.ts`
+
+**Initial approach vs. Decision:**
+Avoided pulling in heavy external vendor SDKs (e.g. live OpenAI/Anthropic/Gemini SDKs), multi-agent routing, or complex persistence layers on Day 1. Instead, built a clean, decoupled foundation using Python's standard library and asyncio:
+1. **Provider Abstraction (`src/providers/base.py`, `src/providers/mock_provider.py`):**
+   - `BaseLLMProvider`: Abstract base class defining `async def generate(messages, tools, **kwargs) -> LLMResponse`.
+   - `LLMMessage`, `ToolCall`, `LLMResponse`: Normalized dataclass contracts for messages, tool requests, and model responses.
+   - `ProviderConfig`: Environment-based configuration loader to prevent hardcoded secrets.
+   - `MockProvider`: Deterministic mock provider supporting predefined responses and predictable tool calling for offline testing.
+2. **Tool Execution Engine (`src/tools/base.py`, `src/tools/registry.py`, `src/tools/executor.py`, `src/tools/builtin.py`):**
+   - `BaseTool`: Abstract base class with JSON schema generator (`to_schema()`) and `async def execute(**kwargs)`.
+   - `ToolRegistry`: Simple in-memory registry for tool registration and schema lookup.
+   - `ToolExecutor`: Async tool execution engine with runtime timing, exception containment, and error reporting.
+   - `ToolResult`: Normalized execution output with `.to_event_payload()` producing event structures aligned with `docs/watchdog/monitoring-signals.md` and Koushik's `Watchdog`.
+   - Builtin prototype tools: `CalculatorTool` and `EchoTool` for pipeline validation.
+
+**Scope Audit & Cleanup:**
+- **Audit Findings:** The core provider and tool prototype is lightweight and modular (~60-90 LOC per component) without premature dependencies.
+- **Cleanup Performed:** Removed the extraneous feature-specific log file (`logs/feature_provider_tools.md`) to maintain the two-file logging architecture (`experimental_log.md` for personal/branch log, `logs/log.md` for shared team log).
+- **Scope Preserved for Day 2+:** Intentionally deferred live vendor SDK integrations, production tool routing, dynamic provider fallback, and full Pathway streaming pipeline.
+
+**Tests & Validation:**
+- Ran `python -m unittest discover -s tests -p "test_*.py"` — 17 unit and integration tests passing.
+- Validated provider generation, mock tool triggering, tool registry, async executor error handling, and watchdog anomaly detection compatibility.
+
+**Impact & Current Status:**
+Day 1 foundation prototype is complete and verified. The orchestration layer (`src/orchestration`) has clean interfaces to build against on Day 2.
+
