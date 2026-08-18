@@ -226,3 +226,61 @@ The repository test suite passed with 19 tests.
 
 **Impact:**
 The Day 2 implementation establishes the first operational Gateway/Orchestration execution path and provides the event and state contracts required for subsequent subsystem integration.
+
+---
+
+### Date: 2026-08-18
+
+**Experiment / Decision:**
+Day 2 Closure — EventStream → Watchdog Dispatch Seam
+
+**Context:**
+Following the compatibility audit, one remaining integration seam existed:
+`EventStream` published events but had no mechanism to forward them to the `Watchdog`.
+
+**Problem:**
+`Watchdog.process_event()` expects a `Dict[str, Any]` payload (specifically with `event_type="tool_called"`).
+`EventStream` stored full `Event` objects but did not dispatch them anywhere.
+The seam `EventStream → Event.payload → Watchdog.process_event()` was unconnected.
+
+**Decision:**
+Added `EventStream.subscribe(callable)`. On every `publish()`, `event.payload` is forwarded to all registered subscribers after the event is stored. Callers connect `Watchdog.process_event` as a subscriber.
+
+No new schema was introduced.
+No event lifecycle values were renamed.
+`src/events/schema.py` remains the sole authoritative event schema.
+`Watchdog` remains a consumer; it does not own the schema.
+
+**Implementation:**
+
+* `src/events/stream.py` — added `subscribe()` and subscriber dispatch loop in `publish()`.
+* `tests/test_eventstream_watchdog_integration.py` — 4 focused tests proving the contract.
+
+**Day 2 Contracts (authoritative for teammates):**
+
+| Contract | Detail |
+|---|---|
+| Authoritative event schema | `src/events/schema.py` — `Event`, `EventLifecycle` |
+| EventStream | In-memory; full `Event` stored in `published_events` |
+| Integration seam | `EventStream.subscribe(watchdog.process_event)` — subscribers receive `event.payload` |
+| Gateway/Orchestrator | Own event production; publish via `EventStream.publish(Event(...))` |
+| Watchdog (Koushik) | Consumes `Event.payload`; registered via `subscribe()` |
+| Provider/Tool results (Jyothi) | `ToolResult.to_event_payload()` produces the payload Watchdog expects |
+| API/REST (Sayan) | `event.to_dict()` provides stable JSON structure for transport |
+| Telemetry (Harshit) | Can consume the event envelope/payload through `published_events` or subscriber registration |
+
+**Validation:**
+28 tests passed (24 pre-existing + 4 new integration tests).
+
+**Intentionally Deferred to Day 3:**
+
+* Full Pathway event-stream integration
+* REST/WebSocket → Gateway integration (Sayan)
+* Advanced execution-state persistence and recovery
+* Expanded retry and multi-turn execution states
+* Production anomaly types in Watchdog (Koushik)
+* Live provider SDK integration (Jyothi)
+* Telemetry pipeline (Harshit)
+
+**Impact:**
+Day 2 is complete. The `EventStream → Event.payload → Watchdog` integration seam is unambiguous and validated. All teammates can continue Day 3 work against stable, tested contracts without waiting for an architectural decision.
