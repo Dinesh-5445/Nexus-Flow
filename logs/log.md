@@ -116,6 +116,15 @@ This file records meaningful implementation and development progress.
   * Verified via `tsc --noEmit` (0 errors on the dashboard project) and an isolated runtime smoke test of the mock event sequence, payload shapes, and replay order — all assertions passed.
   * Not yet wired into `DashboardLayout`/panels — that integration step still depends on Sayan's `/stream/:execution_id` (or a decision to wire mocked data into panels first).
 
+* **Sayan — REST / WebSocket API:**
+
+  * Added `api/src/types.ts` — a schema-accurate TypeScript representation of Gateway contracts (`EventLifecycle`, `ExecutionEvent`, `GatewayRequest`, `GatewayResponse`), strictly aligned with Dinesh's event schema and Unix timestamp conventions (`time.time()`).
+  * Implemented `POST /execute` (payload validation, mock `202 Accepted` response with `stream_url`), `GET /status/:execution_id` (polling fallback), and `simulateExecution` (mock step execution engine emitting events every 500ms).
+  * Implemented WebSocket upgrade handler for `/stream/:execution_id` with per-request client connection tracking (`streamClients` Map) and automatic client cleanup on close.
+  * Built `emitEvent` broadcaster to update in-memory `executionStatus` state and stream formatted JSON events to open WebSocket connections in real time.
+  * Verified via Postman (HTTP + WebSocket client), `wscat`, and `tsc --noEmit` — validated end-to-end request handling, live event streaming order, and status polling.
+  * Unblocked Harshit to wire the telemetry pipeline directly into `/stream/:execution_id`.
+
 ### Current Status
 
 * Gateway and orchestration foundation: **Implemented & Validated**
@@ -128,3 +137,5 @@ This file records meaningful implementation and development progress.
 * Telemetry event representation & mock consumption foundation: **Implemented & Validated (Harshit — Day 2)**
 * Dashboard/telemetry integration (wiring into panels): **Pending**
 * End-to-end system integration: **Pending (Day 3)**
+
+
