@@ -361,3 +361,131 @@ No provider/tool implementation changes were required. The Day 1 provider abstra
 
 **Final Status:**
 Completed. The provider and tool subsystem is fully compatible with Dinesh's Gateway/Event contract, verified with 28 passing tests, and ready for Day 3 integration.
+
+
+
+---
+
+### Date: 2026-08-16
+
+**Experiment / Decision:**
+Frontend Dashboard Scaffold — Placeholder-Driven Foundation
+
+**Context:**
+No API contract (Sayan) or event schema (Dinesh) existed yet at Day 1. The
+dashboard needed a starting structure that could be built and rendered
+end-to-end without depending on either.
+
+**Problem:**
+Building against guessed data shapes risks locking in an incorrect contract
+and violates the interface rule (don't invent APIs/event schemas before an
+owner defines them).
+
+**Initial Approach:**
+Considered hardcoding a "best guess" event/session shape to move faster.
+
+**Decision:**
+Rejected the best-guess approach. Built the dashboard scaffold with
+deliberately loose, optional-heavy types (`SessionInfo`, `ExecutionEvent`,
+`Metrics`, `WatchdogAlert` in `types.ts`) fed entirely by local
+`placeholderData.ts`, with every type file explicitly commented as
+PLACEHOLDER / not-final-contract.
+
+**Implementation:**
+* `frontend/dashboard/src/App.tsx` — wires placeholder data into layout
+* `frontend/dashboard/src/DashboardLayout.tsx`
+* `frontend/dashboard/src/components/{SessionPanel,EventStreamPanel,MetricsPanel,AlertsPanel}.tsx`
+* `frontend/dashboard/src/types.ts`
+* `frontend/dashboard/src/data/placeholderData.ts`
+* Vite + TypeScript + React project setup (`package.json`, `tsconfig.json`, `vite.config.ts`)
+
+**Reason:**
+Get a working, renderable dashboard shell in place without prematurely
+coupling to contracts that Sayan and Dinesh hadn't finalized yet — keeps the
+frontend independently developable per `CONTRIBUTION_GUIDE.md`.
+
+**Deferred:**
+* Real WebSocket/REST data
+* Event schema-accurate types
+* Watchdog alert format
+
+**Impact:**
+Dashboard renders end-to-end with placeholder data. Structure is in place to
+receive real contracts once they exist, without requiring a rewrite of the
+component tree.
+
+---
+
+### Date: 2026-08-18
+
+**Experiment / Decision:**
+Telemetry Event-Consumption Foundation — Mocked Event Source
+
+**Context:**
+Day 2 task (assigned scope): build the telemetry/event-consumption
+foundation — not the full dashboard — and define how execution
+events/status are represented for the frontend, using mocked events with no
+dependency on the real execution pipeline.
+
+**Problem:**
+`services/api` (Sayan) has no working `/execute` or `/stream/:execution_id`
+yet, so there's no real feed to connect to. At the same time, the existing
+placeholder types in `types.ts` are intentionally loose and don't reflect
+the real event contract Dinesh has since finalized (`src/events/schema.py`,
+`src/gateway/router.py`, `src/orchestration/executor.py`,
+`src/tools/base.py`, `src/state/manager.py`).
+
+**Investigation:**
+Read the actual backend event-producing code rather than guessing the
+contract:
+* `Event`/`EventLifecycle` envelope — `src/events/schema.py`
+* `request_received`/`completed`/`failed` payloads — `src/gateway/router.py`
+* `execution_started` payload — `src/orchestration/executor.py`
+* `tool_execution` payload — `ToolResult.to_event_payload()` in `src/tools/base.py`
+* execution status values (`pending`/`running`/`completed`/`failed`) — `src/state/manager.py`
+
+**Finding (flagged, not resolved):**
+`ToolResult.to_event_payload()` nests its own `request_id`, `timestamp`, and
+a literal `event_type: "tool_called"` inside the `tool_execution` payload —
+inconsistent with the outer envelope's `event_type`
+(`EventLifecycle.TOOL_EXECUTION`). Reproduced exactly as-is rather than
+silently normalized, and documented for Dinesh/Jyothi/Koushik.
+
+**Decision:**
+Created an isolated `frontend/dashboard/src/telemetry/` module:
+* `types.ts` — schema-accurate `GatewayEvent` discriminated union + `ExecutionStatus`/`statusForEvent`
+* `EventSource.ts` — transport-agnostic `subscribe`/`close` interface
+* `mockEvents.ts` — generates a realistic mocked execution event sequence
+* `MockEventSource.ts` — replays the mock sequence on a timer, implementing `EventSource`
+* `useTelemetryEvents.ts` — React hook accumulating events + derived per-request status
+* `index.ts`, `README.md`
+
+Deliberately **not** wired into `App.tsx`/`DashboardLayout.tsx`/existing
+panels or the existing `types.ts`/`placeholderData.ts` — that's dashboard
+integration work, out of scope for the event-consumption foundation task.
+
+**Reason:**
+Keep event representation and consumption decoupled from transport so a
+future `WebSocketEventSource` (once Sayan's `/stream/:execution_id` exists)
+can implement the same interface and drop in with zero consumer changes.
+
+**Validation:**
+* `npx tsc --noEmit` on the dashboard project — 0 errors.
+* Isolated Node smoke test of `mockEvents`/`MockEventSource`/`statusForEvent`
+  — verified event ordering (`request_received → execution_started →
+  tool_execution* → completed|failed`), payload shapes, the failure path, and
+  `MockEventSource` replay order. All assertions passed.
+* `npm run build` fails on a pre-existing scaffold gap (missing `index.html`)
+  unrelated to this change — not something this task covers.
+
+**Deferred:**
+* Wiring `telemetry/` into `DashboardLayout`/panels and reconciling with
+  existing `types.ts`/`placeholderData.ts`
+* Real WebSocket source — depends on Sayan's `/stream/:execution_id`
+* Resolving the `tool_called` vs `tool_execution` schema quirk — needs
+  Dinesh/Jyothi/Koushik
+
+**Impact:**
+Frontend now has a schema-accurate, independently testable
+event-consumption layer, ready to plug into the dashboard once panels move
+off placeholder data — without depending on the still-stubbed real pipeline.

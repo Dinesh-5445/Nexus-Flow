@@ -55,12 +55,17 @@ This file records meaningful implementation and development progress.
   * Implemented initial `/health`, `/execute`, `/status/:execution_id`, and WebSocket `/stream/:execution_id` endpoints.
   * `/execute` and `/status/:execution_id` remain integration stubs pending Gateway integration.
 
+
 * **Harshit — Frontend / Dashboard / Telemetry:**
 
-  * Frontend, dashboard, and telemetry components remained at the initial architectural/scaffolding stage.
-  * Further implementation is pending API and telemetry contracts.
+  * Scaffolded the dashboard as a Vite + React + TypeScript project under `frontend/dashboard/`.
+  * Implemented `App.tsx`, `DashboardLayout.tsx`, and four panel components (`SessionPanel`, `EventStreamPanel`, `MetricsPanel`, `AlertsPanel`).
+  * Defined intentionally loose placeholder types (`types.ts`) and local `placeholderData.ts`, since no API contract or event schema existed yet at Day 1.
+  * Chat client (`frontend/client/`) remains unstarted.
 
 ---
+
+
 
 ### Date: 2026-08-17 / 2026-08-18 — Day 2 Gateway, Event Contract & Subsystem Compatibility
 
@@ -91,12 +96,25 @@ This file records meaningful implementation and development progress.
   * Maintained REST / WebSocket API foundation under `services/api`.
   * Integration with Python Gateway core remains pending Day 3 against the finalized `GatewayRequest` / `GatewayResponse` models.
 
+
 * **Harshit — Frontend / Dashboard / Telemetry:**
 
-  * Maintained frontend, dashboard, and telemetry scaffolding under `frontend/` and `services/telemetry/`.
-  * Telemetry and monitoring stream consumption pending Day 3 API and event pipeline integration.
+  * Dashboard/telemetry scaffolding held stable during Day 2 while Dinesh's Gateway/Event contract stabilized — no changes made against a moving target.
+  * `services/telemetry/` (Java/Node alert-aggregation service) not yet started; scoped for after the watchdog alert format and event pipeline are finalized.
 
 ---
+
+---
+
+### Date: 2026-08-19 — Day 2 (Harshit): Telemetry Event-Consumption Foundation
+
+* **Harshit — Frontend / Dashboard / Telemetry:**
+
+  * Added `frontend/dashboard/src/telemetry/` — a schema-accurate representation of execution events/status, modeled directly on Dinesh's finalized contract (`src/events/schema.py`, `src/gateway/router.py`, `src/orchestration/executor.py`, `src/tools/base.py`, `src/state/manager.py`).
+  * Implemented `EventSource` (transport-agnostic subscribe/close interface), `MockEventSource` (mocked events only, no dependency on the real execution pipeline), and a `useTelemetryEvents` React consumption hook with derived per-request execution status.
+  * Flagged an existing contract inconsistency in `ToolResult.to_event_payload()` — the payload's nested `event_type: "tool_called"` conflicts with the outer `EventLifecycle.TOOL_EXECUTION` — for Dinesh/Jyothi/Koushik to resolve.
+  * Verified via `tsc --noEmit` (0 errors on the dashboard project) and an isolated runtime smoke test of the mock event sequence, payload shapes, and replay order — all assertions passed.
+  * Not yet wired into `DashboardLayout`/panels — that integration step still depends on Sayan's `/stream/:execution_id` (or a decision to wire mocked data into panels first).
 
 ### Current Status
 
@@ -107,5 +125,6 @@ This file records meaningful implementation and development progress.
 * EventStream → Watchdog dispatch seam: **Implemented & Validated**
 * Pathway event-stream integration: **Pending (Day 3)**
 * REST/WebSocket Gateway integration: **Pending (Day 3)**
-* Dashboard/telemetry integration: **Pending (Day 3)**
+* Telemetry event representation & mock consumption foundation: **Implemented & Validated (Harshit — Day 2)**
+* Dashboard/telemetry integration (wiring into panels): **Pending**
 * End-to-end system integration: **Pending (Day 3)**
