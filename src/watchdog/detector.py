@@ -1,6 +1,7 @@
 from collections import Counter
 import time
 from typing import Any, Dict, Optional
+from src.events.schema import EventLifecycle
 
 
 class Watchdog:
@@ -13,7 +14,7 @@ class Watchdog:
             return None
 
         event_type = event.get("event_type")
-        if event_type != "tool_called":
+        if event_type != EventLifecycle.TOOL_EXECUTION.value:
             return None
 
         request_id = event.get("request_id")
@@ -67,4 +68,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()

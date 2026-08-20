@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import time
 from typing import Any, Dict, Optional
+from ..events.schema import EventLifecycle
 
 
 @dataclass
@@ -43,7 +44,7 @@ class ToolResult:
         """
         return {
             "request_id": request_id,
-            "event_type": "tool_called",
+            "event_type": EventLifecycle.TOOL_EXECUTION.value,
             "timestamp": time.time(),
             "tool_name": self.tool_name,
             "status": self.status,

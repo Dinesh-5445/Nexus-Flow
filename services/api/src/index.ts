@@ -2,6 +2,8 @@ import express, {Request, Response} from "express";
 import http from "http";
 import { WebSocketServer, WebSocket as WsWebSocket } from "ws";
 import { randomUUID } from "crypto";
+import { spawn } from "child_process";
+import path from "path";
 import { GatewayRequest, GatewayResponse, ExecutionEvent, EventLifecycle } from "./types";
 
 const app = express();
@@ -40,7 +42,7 @@ app.post("/execute", (req: Request, res: Response) => {
     stream_url: `/stream/${request_id}`
   });
 
-  simulateExecution(request_id);
+  executeGatewayRequest(request_id, messages, _session_id || "default-session");
 });
 
 // Polling fallback for status (alternative to WS stream)
@@ -105,16 +107,44 @@ const emitEvent = (requestId: string, eventType: EventLifecycle, payload?: Recor
   }
 }
 
-const simulateExecution = (requestId: string) => {
-  const steps: EventLifecycle[] = [
-    "request_received",
-    "execution_started",
-    "tool_execution",
-    "completed"
-  ];
+const executeGatewayRequest = (requestId: string, messages: any[], sessionId: string) => {
+  // Spawn the Python Gateway script from the repository root
+  const rootDir = path.resolve(__dirname, "../../..");
+  const pyProcess = spawn("python", ["-m", "src.main"], {
+    cwd: rootDir
+  });
 
-  steps.forEach((eventType, i) => {
-    setTimeout(()=>emitEvent(requestId, eventType), (i+1)*500);
+  const reqObj = {
+    request_id: requestId,
+    session_id: sessionId,
+    messages: messages
+  };
+
+  pyProcess.stdin.write(JSON.stringify(reqObj) + "\n");
+  pyProcess.stdin.end();
+
+  pyProcess.stdout.on("data", (data: Buffer) => {
+    const lines = data.toString().split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed.__type__ === "GatewayResponse") {
+          // Execution completed
+          executionStatus.set(requestId, parsed.status);
+        } else if (parsed.event_type) {
+          // Real emitted event
+          emitEvent(requestId, parsed.event_type as EventLifecycle, parsed.payload);
+        }
+      } catch (e) {
+        console.error("Failed to parse python stdout:", trimmed);
+      }
+    }
+  });
+
+  pyProcess.stderr.on("data", (data: Buffer) => {
+    console.error("Python stderr:", data.toString());
   });
 };
 
