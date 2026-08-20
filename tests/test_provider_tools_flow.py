@@ -9,6 +9,7 @@ import unittest
 from src.providers import LLMMessage, MockProvider, ProviderConfig, ToolCall
 from src.tools import CalculatorTool, ToolExecutor, ToolRegistry
 from src.watchdog.detector import Watchdog
+from src.events.schema import EventLifecycle
 
 
 class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
@@ -48,7 +49,7 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
 
         # 6. Format event payload and verify compatibility with Koushik's Watchdog
         event_payload = tool_result.to_event_payload(request_id=request_id)
-        self.assertEqual(event_payload["event_type"], "tool_called")
+        self.assertEqual(event_payload["event_type"], EventLifecycle.TOOL_EXECUTION.value)
         self.assertEqual(event_payload["tool_name"], "calculator")
         self.assertEqual(event_payload["status"], "completed")
 

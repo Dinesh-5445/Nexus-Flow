@@ -139,3 +139,13 @@ This file records meaningful implementation and development progress.
 * End-to-end system integration: **Pending (Day 3)**
 
 
+
+### Date: 2026-08-20 — Day 3 Gateway / Orchestration Flow
+
+* **Dinesh — Gateway / Orchestration:**
+
+  * Connected the GatewayRouter and Orchestrator to the provider/tool interfaces (MockProvider, ToolExecutor) via a clean Python execution entry point (src/main.py).
+  * Replaced the mock execution flow with a real provider/tool execution path executing entirely within the Gateway boundary.
+  * Resolved the 	ool_called vs 	ool_execution contract inconsistency between the Gateway event envelope and the ToolResult payload schema.
+  * Validated that Watchdog continues to receive and process events through the EventStream payload subscriber seam.
+  * Verified Gateway/Orchestration failure handling, and execution output tests.

@@ -7,6 +7,7 @@ request isolation, and ToolResult event payload integration.
 import unittest
 from src.tools.base import ToolResult
 from src.watchdog.detector import Watchdog
+from src.events.schema import EventLifecycle
 
 
 class TestWatchdog(unittest.TestCase):
@@ -19,7 +20,7 @@ class TestWatchdog(unittest.TestCase):
         for i in range(1, 5):
             event = {
                 "request_id": "req-100",
-                "event_type": "tool_called",
+                "event_type": EventLifecycle.TOOL_EXECUTION.value,
                 "timestamp": 1000.0 + i,
                 "tool_name": "calculator",
                 "status": "completed",
@@ -37,7 +38,7 @@ class TestWatchdog(unittest.TestCase):
         for i in range(1, 6):
             event = {
                 "request_id": "req-200",
-                "event_type": "tool_called",
+                "event_type": EventLifecycle.TOOL_EXECUTION.value,
                 "timestamp": 2000.0 + i,
                 "tool_name": "echo",
                 "status": "completed",
@@ -62,7 +63,7 @@ class TestWatchdog(unittest.TestCase):
         for i in range(3):
             self.watchdog.process_event({
                 "request_id": "req-A",
-                "event_type": "tool_called",
+                "event_type": EventLifecycle.TOOL_EXECUTION.value,
                 "tool_name": "calculator"
             })
 
@@ -70,7 +71,7 @@ class TestWatchdog(unittest.TestCase):
         for i in range(3):
             alert = self.watchdog.process_event({
                 "request_id": "req-B",
-                "event_type": "tool_called",
+                "event_type": EventLifecycle.TOOL_EXECUTION.value,
                 "tool_name": "calculator"
             })
             self.assertIsNone(alert)

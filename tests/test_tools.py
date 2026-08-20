@@ -4,6 +4,7 @@ Unit tests for the Tool Abstraction and Execution Engine.
 
 import unittest
 from src.providers.base import ToolCall
+from src.events.schema import EventLifecycle
 from src.tools.base import BaseTool, ToolResult
 from src.tools.builtin import CalculatorTool, EchoTool
 from src.tools.executor import ToolExecutor
@@ -103,7 +104,7 @@ class TestTools(unittest.IsolatedAsyncioTestCase):
         )
         event = result.to_event_payload(request_id="req-001", session_id="sess-001")
         self.assertEqual(event["request_id"], "req-001")
-        self.assertEqual(event["event_type"], "tool_called")
+        self.assertEqual(event["event_type"], EventLifecycle.TOOL_EXECUTION.value)
         self.assertEqual(event["tool_name"], "calculator")
         self.assertEqual(event["status"], "completed")
         self.assertEqual(event["tool_call_id"], "call_99")
