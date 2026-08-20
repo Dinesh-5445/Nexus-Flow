@@ -489,3 +489,15 @@ can implement the same interface and drop in with zero consumer changes.
 Frontend now has a schema-accurate, independently testable
 event-consumption layer, ready to plug into the dashboard once panels move
 off placeholder data — without depending on the still-stubbed real pipeline.
+### Date: 2026-08-20 — Day 3
+
+**Decision:**
+Refined the Gateway execution boundary to strictly decouple Python Gateway/Orchestration from the Node.js API implementation.
+
+**Reason:**
+The initial Day 3 implementation spanned across Sayan's REST/WebSocket boundary by introducing child-process spawning and stdout stream parsing directly in services/api/src/index.ts, and by monkey-patching the EventStream publish method to write JSON lines to stdout in src/main.py.
+This violated the decoupled service boundary.
+
+**Action:**
+* Retained src/main.py as a clean Python execution entry point that accepts GatewayRequest and wires the Python subsystems (MockProvider, Orchestrator, Watchdog) without containing API-specific I/O logic.
+* Avoided API architecture redesign; the Python execution flow now works independently and awaits agreed cross-service integration (e.g. HTTP, gRPC, Pathway) in subsequent phases.
