@@ -489,3 +489,88 @@ can implement the same interface and drop in with zero consumer changes.
 Frontend now has a schema-accurate, independently testable
 event-consumption layer, ready to plug into the dashboard once panels move
 off placeholder data — without depending on the still-stubbed real pipeline.
+
+---
+
+### Date: 2026-08-20
+
+**Experiment / Decision:**
+Day 3 Provider / Tool Integration Verification with Gateway & Orchestration Flow
+
+**Context:**
+On Day 3, Dinesh connected the Gateway/Orchestrator core (`src/gateway/`, `src/orchestration/`) to the existing Provider Abstraction and Tool Execution subsystem (`src/providers/`, `src/tools/`). Jyothi's Day 3 ownership responsibility is to inspect the integration, trace the execution flow end-to-end, verify provider and tool compatibility with the live orchestrator path, verify event payload mapping and lifecycle event emission, fix only actual compatibility issues discovered, maintain test suite integrity, and update logs without over-implementing.
+
+**What was Inspected:**
+* Dinesh's Gateway Router and Orchestrator integration (`src/gateway/router.py`, `src/orchestration/executor.py`, `src/gateway/models.py`)
+* Provider abstraction and Mock Provider execution (`src/providers/base.py`, `src/providers/mock_provider.py`, `src/providers/__init__.py`)
+* Tool execution engine and builtin tool execution (`src/tools/base.py`, `src/tools/builtin.py`, `src/tools/executor.py`, `src/tools/registry.py`, `src/tools/__init__.py`)
+* Event schema, EventStream dispatch seam, and Watchdog anomaly detection integration (`src/events/schema.py`, `src/events/stream.py`, `src/watchdog/detector.py`)
+* State Manager execution tracking (`src/state/manager.py`)
+* Repository integration and unit tests (`tests/test_gateway_orchestration.py`, `tests/test_provider_tools_flow.py`, `tests/test_providers.py`, `tests/test_tools.py`, `tests/test_eventstream_watchdog_integration.py`, `tests/test_watchdog.py`)
+
+**Traced Execution Flow:**
+1. `Client / API Layer` submits `GatewayRequest(request_id, messages, session_id, parameters)` to `GatewayRouter.handle_request()`.
+2. `GatewayRouter` registers state as `pending`, publishes `Event(event_type=EventLifecycle.REQUEST_RECEIVED, request_id, payload={"session_id", "messages_count"})` to `EventStream`, updates state to `running`, and delegates to `Orchestrator.execute_flow(request)`.
+3. `Orchestrator` emits `Event(event_type=EventLifecycle.EXECUTION_STARTED, request_id, payload={"provider_model"})` to `EventStream`.
+4. `Orchestrator` translates `request.messages` to `[LLMMessage(**msg) for msg in request.messages]` and retrieves OpenAPI-compliant tool schemas via `tool_executor.registry.get_schemas()`.
+5. `Orchestrator` invokes `await provider.generate(messages=llm_messages, tools=tools_schema)` on `BaseLLMProvider` (`MockProvider`).
+6. `MockProvider` returns normalized `LLMResponse(content, tool_calls, model, finish_reason, usage, raw_response)`.
+7. When `response.has_tool_calls` is `True`, `Orchestrator` iterates over `response.tool_calls` and calls `await tool_executor.execute_tool_call(tool_call, request_id=request.request_id, session_id=request.session_id)`.
+8. `ToolExecutor` looks up the tool in `ToolRegistry`, validates/parses arguments (dict or stringified JSON), executes `await tool.execute(**args)` with execution timing and error containment, and returns a normalized `ToolResult`.
+9. `Orchestrator` calls `tool_result.to_event_payload(request_id, session_id)` and publishes `Event(event_type=EventLifecycle.TOOL_EXECUTION, request_id, payload=...)` to `EventStream`.
+10. `EventStream.publish()` synchronously dispatches `event.payload` to all registered subscribers, including `Watchdog.process_event()`, enabling real-time anomaly detection (e.g. repeated tool calls) without polling or blocking orchestration.
+11. `Orchestrator` aggregates tool results into `{"content": response.content, "tool_results": [...]}` and returns to `GatewayRouter`.
+12. `GatewayRouter` transitions state to `completed`, publishes `Event(event_type=EventLifecycle.COMPLETED, request_id, payload={"status": "success"})`, and returns `GatewayResponse(request_id, status="success", result, execution_time_ms)`.
+13. On exceptions, `GatewayRouter` transitions state to `failed`, publishes `Event(event_type=EventLifecycle.FAILED, request_id, payload={"error": str(e)})`, and returns `GatewayResponse(request_id, status="failed", error, execution_time_ms)`.
+
+**Provider Compatibility Findings:**
+* **Request & Message Formatting:** `LLMMessage` dataclass fields (`role`, `content`, `name`, `tool_call_id`) and `to_dict()` are perfectly aligned with the unpacking logic `[LLMMessage(**msg) for msg in request.messages]`.
+* **Async Invocations:** `BaseLLMProvider.generate()` is fully async and awaits cleanly within the orchestrator loop.
+* **Response Contract:** `LLMResponse` fields (`content`, `tool_calls`, `model`, `finish_reason`, `usage`) and `@property has_tool_calls` match orchestrator requirements exactly.
+* **Identifiers:** Model configuration via `ProviderConfig.model_name` is correctly queried and emitted during `EXECUTION_STARTED`.
+* **Conclusion:** 100% compatible. No provider-side modifications required.
+
+**Tool Compatibility Findings:**
+* **Tool Schema Generation:** `ToolRegistry.get_schemas()` provides standard OpenAPI tool definitions passed directly to `provider.generate()`.
+* **Tool Execution Path:** `ToolExecutor.execute_tool_call()` handles single and concurrent tool execution, safely parses arguments, records runtime duration (`execution_time_ms`), and returns `ToolResult`.
+* **Error Containment:** Non-existent tools, argument mismatches, and execution exceptions return `ToolResult(status="failed", error=...)` without raising uncaught exceptions, maintaining workflow stability.
+* **Conclusion:** 100% compatible. No tool-side modifications required.
+
+**Event Payload Mapping Findings:**
+* `ToolResult.to_event_payload(request_id, session_id)` produces the required dictionary structure:
+  * `request_id: str`
+  * `event_type: "tool_called"` (payload-level identifier consumed by Watchdog)
+  * `timestamp: float`
+  * `tool_name: str`
+  * `status: "completed" | "failed"`
+  * `session_id: str`
+  * `tool_call_id: str`
+  * `execution_time_ms: float`
+  * `error: Optional[str]`
+* This payload is wrapped inside `Event(event_type=EventLifecycle.TOOL_EXECUTION, request_id=..., payload=...)`.
+* When published via `EventStream.publish()`, subscribers like `Watchdog.process_event()` receive `event.payload`, successfully filtering for `event_type == "tool_called"` and tracking per-request tool call counts.
+* Mapping across `ToolResult` → `Event` → `EventStream` → `Watchdog` is consistent, verified, and functioning as intended.
+
+**Compatibility Changes Made:**
+* No provider/tool implementation changes were required. The provider abstraction, tool registry, executor, and result formatting contracts proved completely robust and seamlessly integrated with Dinesh's Gateway/Orchestration pipeline.
+
+**Files Changed:**
+* `experimental_log.md` — Updated with Jyothi's Day 3 integration verification findings and execution flow trace.
+* `logs/log.md` — Updated shared team log with verified Day 3 integration progress.
+
+**Tests Performed:**
+* Ran full test suite: `python -m unittest discover -v -s tests`
+  * `test_eventstream_watchdog_integration.py` (4 tests) — PASSED
+  * `test_gateway_orchestration.py` (2 tests) — PASSED
+  * `test_provider_tools_flow.py` (1 test) — PASSED
+  * `test_providers.py` (6 tests) — PASSED
+  * `test_tools.py` (10 tests) — PASSED
+  * `test_watchdog.py` (5 tests) — PASSED
+  * **Result: 28/28 tests passed (0 failures, 0 errors in ~0.50s).**
+
+**Issues / Coordination:**
+* Frontend telemetry log flagged the duality between the outer envelope `EventLifecycle.TOOL_EXECUTION` and the inner payload `event_type: "tool_called"`. Verified that this is intentional per the Day 2 subscriber contract (`EventStream` forwards `event.payload` directly to `Watchdog`, which filters on `tool_called`). The contracts are currently aligned across backend systems.
+* Live vendor SDK integration (OpenAI/Anthropic/Gemini) remains deferred according to the project plan; `MockProvider` fully supports all local development and test scenarios.
+
+**Final Status:**
+Completed. Gateway → Orchestrator → Provider → Tool Execution → EventStream → Watchdog integration verified successfully. System is stable and ready for Day 4.
