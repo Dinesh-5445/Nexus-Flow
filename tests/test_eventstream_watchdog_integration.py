@@ -67,7 +67,7 @@ class TestEventStreamWatchdogContract(unittest.IsolatedAsyncioTestCase):
         stored = self.event_stream.published_events[0]
         self.assertEqual(stored.event_type, EventLifecycle.TOOL_EXECUTION)
         self.assertEqual(stored.payload["tool_name"], "calculator")
-        self.assertEqual(stored.payload["event_type"], "tool_called")
+        self.assertEqual(stored.payload["event_type"], EventLifecycle.TOOL_EXECUTION.value)
 
         # No alert on the first call (threshold = 5).
         self.assertEqual(len(self.alerts), 0)

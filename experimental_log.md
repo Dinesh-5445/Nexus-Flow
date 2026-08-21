@@ -530,3 +530,51 @@ Isolate and standardise the API transport layer so clients can consume real-time
 
 **Impact:**
 REST/WebSocket Gateway now strictly matches the team's event contract, providing a fully functional streaming interface that unblocks frontend dashboard telemetry integration.
+
+---
+
+### Date: 2026-08-20
+
+**Experiment / Decision:**
+Day 3 — Provider/Tool Integration Verification and Gateway Execution Boundary
+
+**Context:**
+Day 3 connected the Gateway/Orchestrator execution path with the existing provider/tool subsystem while keeping subsystem ownership and service boundaries intact.
+
+**What was verified:**
+* Gateway request handling and Orchestrator execution flow.
+* `BaseLLMProvider`, `MockProvider`, `LLMMessage`, `LLMResponse`, and `ToolCall` compatibility with the Orchestrator.
+* `ToolRegistry`, `ToolExecutor`, and `ToolResult` integration.
+* `ToolResult.to_event_payload()` → `Event(EventLifecycle.TOOL_EXECUTION)` → `EventStream` → `Watchdog.process_event()` mapping.
+* State transitions and lifecycle events: `REQUEST_RECEIVED → EXECUTION_STARTED → TOOL_EXECUTION → COMPLETED/FAILED`.
+
+**Execution Flow:**
+`Gateway → Orchestrator → Provider → ToolExecutor → ToolResult → EventStream → Watchdog → Gateway response`
+
+The provider and tool interfaces matched the existing Orchestrator contracts. No provider/tool implementation changes were required.
+
+**Gateway/API Boundary Decision:**
+The Python Gateway/Orchestration path remains independent of the Node.js API service. API-specific child-process/stdout handling was not kept inside the Python execution layer. `src/main.py` remains a Python execution entry point that wires the Python subsystems, while cross-service communication is deferred to an agreed integration mechanism in a later phase.
+
+**Coordination Finding:**
+The outer event uses `EventLifecycle.TOOL_EXECUTION`, while the payload contains `event_type: "tool_called"` for the existing Watchdog subscriber contract. This was verified as intentional and was not changed.
+
+**Validation:**
+Full repository test suite passed:
+
+`python -m unittest discover -v -s tests`
+
+**Result:** 28/28 tests passed, with 0 failures and 0 errors.
+
+**Deferred:**
+* Live OpenAI/Anthropic/Gemini provider SDK integration.
+* Production provider routing/fallback and expanded tool policies.
+* REST/WebSocket → Gateway integration.
+* Full Pathway streaming and advanced execution-state persistence/recovery.
+
+**Files Changed:**
+* `experimental_log.md` — Day 3 verification and architectural decision record.
+* `logs/log.md` — shared Day 3 status.
+
+**Final Status:**
+Day 3 provider/tool integration verification is complete. The existing Provider/Tool subsystem is compatible with the Gateway/Orchestration execution path, and the Python execution boundary remains decoupled from the Node.js API layer. Ready for Day 4.
