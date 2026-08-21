@@ -489,3 +489,44 @@ can implement the same interface and drop in with zero consumer changes.
 Frontend now has a schema-accurate, independently testable
 event-consumption layer, ready to plug into the dashboard once panels move
 off placeholder data — without depending on the still-stubbed real pipeline.
+
+
+### Date: 2026-08-19
+
+**Experiment / Decision:**
+REST/WebSocket Gateway & Event Contract Alignment
+
+**Context:**
+Day 2 task (assigned scope): implement mock REST execution endpoints and WebSocket event streaming aligned with Dinesh's initial Gateway and event contracts, without requiring real Gateway backend integration yet.
+
+**Problem:**
+The existing `api/src/index.ts` skeleton contained stubbed `/execute` and `/status` endpoints, lacked type definitions for Gateway/Event contracts, and had no WebSocket client connection tracking or event dispatch logic. Front-end telemetry development (Harshit) was blocked on having a functional `/stream/:execution_id` endpoint to connect against.
+
+**Investigation:**
+Reviewed Dinesh's Gateway request/response standard dataclasses and Event schema definitions:
+* `EventLifecycle` state progression (`request_received` → `execution_started` → `tool_execution` → `completed` | `failed`).
+* `ExecutionEvent` timestamp requirements — Unix floating-point seconds matching Python's `time.time()`, necessitating `Date.now() / 1000` in TypeScript.
+* Connection routing constraints for streaming events to specific execution listeners.
+
+**Decision:**
+Implemented the REST and WebSocket Gateway layer in `api/`:
+* `types.ts` — schema-accurate TypeScript interfaces for `GatewayRequest`, `GatewayResponse`, `ExecutionEvent`, and `EventLifecycle`.
+* `POST /execute` — added payload validation (`request_id`, `messages`), initial state tracking, `202 Accepted` response with `stream_url`, and triggered async mock execution.
+* `GET /status/:execution_id` — added polling fallback using an in-memory `executionStatus` map with `404` handling for invalid execution IDs.
+* WebSocket Handler — configured route matching for `/stream/:execution_id` with per-request client pooling using a `streamClients` map (`Map<string, Set<WsWebSocket>>`) and auto-cleanup on client socket `close`.
+* `emitEvent` & `simulateExecution` — built event broadcasting logic and a step simulator emitting mock lifecycle events at 500ms intervals.
+
+**Reason:**
+Isolate and standardise the API transport layer so clients can consume real-time WebSocket events and REST endpoints matching the finalized contract immediately, decoupling frontend stream development from backend execution engine readiness.
+
+**Validation:**
+* `npx tsc --noEmit` — 0 TypeScript compiler errors.
+* `curl` testing for `POST /execute` (verified `202 Accepted` and `stream_url`) and `GET /status/:execution_id` (verified state updates from `request_received` to `completed`).
+* Live WebSocket streaming verified via `wscat` / Postman connecting to `ws://localhost:3000/stream/:execution_id` — confirmed correctly ordered JSON event delivery and clean disconnect handling.
+
+**Deferred:**
+* Replacing `simulateExecution` with real Gateway / Orchestrator integration.
+* Wiring Pathway event-stream pipeline into the REST/WebSocket layer (Day 3).
+
+**Impact:**
+REST/WebSocket Gateway now strictly matches the team's event contract, providing a fully functional streaming interface that unblocks frontend dashboard telemetry integration.
