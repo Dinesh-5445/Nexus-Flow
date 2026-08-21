@@ -5,6 +5,16 @@ request isolation, and ToolResult event payload integration.
 """
 
 import unittest
+from src.gateway.models import GatewayRequest
+from src.gateway.router import GatewayRouter
+from src.orchestration.executor import Orchestrator
+from src.state.manager import StateManager
+from src.events.stream import EventStream
+from src.providers.mock_provider import MockProvider
+from src.providers.base import LLMResponse, ToolCall
+from src.tools.executor import ToolExecutor
+from src.tools.registry import ToolRegistry
+from src.tools.builtin import CalculatorTool
 from src.tools.base import ToolResult
 from src.watchdog.detector import Watchdog
 
@@ -115,5 +125,157 @@ class TestWatchdog(unittest.TestCase):
         self.assertNotIn("req-300", self.watchdog.tool_history)
 
 
+class TestWatchdogRealExecutionIntegration(unittest.IsolatedAsyncioTestCase):
+    """
+    Integration tests connecting Watchdog to events produced by the actual execution flow:
+    GatewayRouter -> Orchestrator -> ToolExecutor -> ToolResult -> EventStream -> Watchdog
+    """
+
+    def setUp(self):
+        self.registry = ToolRegistry()
+        self.registry.register(CalculatorTool())
+        self.tool_executor = ToolExecutor(registry=self.registry)
+        self.mock_provider = MockProvider()
+        self.event_stream = EventStream()
+        self.state_manager = StateManager()
+
+        self.orchestrator = Orchestrator(
+            provider=self.mock_provider,
+            tool_executor=self.tool_executor,
+            event_stream=self.event_stream
+        )
+
+        self.gateway = GatewayRouter(
+            orchestrator=self.orchestrator,
+            state_manager=self.state_manager,
+            event_stream=self.event_stream
+        )
+
+        self.watchdog = Watchdog(repeated_call_threshold=5)
+        self.watchdog.attach_to_event_stream(self.event_stream)
+
+    async def test_real_execution_event_reaches_watchdog(self):
+        """Verify that a tool call in the actual execution flow emits an event received by Watchdog."""
+        self.mock_provider.predefined_responses.append(
+            LLMResponse(
+                content="Calculating...",
+                tool_calls=[
+                    ToolCall(
+                        id="call_real_1",
+                        name="calculator",
+                        arguments={"expression": "5 + 3"}
+                    )
+                ]
+            )
+        )
+
+        request = GatewayRequest(
+            request_id="req-real-001",
+            session_id="sess-real-001",
+            messages=[{"role": "user", "content": "Calculate 5 + 3"}]
+        )
+
+        response = await self.gateway.handle_request(request)
+
+        self.assertEqual(response.status, "success")
+        self.assertIn("req-real-001", self.watchdog.tool_history)
+        self.assertEqual(self.watchdog.tool_history["req-real-001"], ["calculator"])
+        self.assertEqual(len(self.watchdog.alerts), 0)
+
+    async def test_normal_execution_flow_no_alert(self):
+        """Tool executions below threshold during real execution flow do not trigger an alert."""
+        self.mock_provider.predefined_responses.append(
+            LLMResponse(
+                content="Calculating...",
+                tool_calls=[
+                    ToolCall(
+                        id="call_norm_1",
+                        name="calculator",
+                        arguments={"expression": "10 + 20"}
+                    )
+                ]
+            )
+        )
+
+        request = GatewayRequest(
+            request_id="req-norm-001",
+            session_id="sess-norm-001",
+            messages=[{"role": "user", "content": "Calculate 10 + 20"}]
+        )
+
+        await self.gateway.handle_request(request)
+        self.assertEqual(len(self.watchdog.alerts), 0)
+
+    async def test_repeated_tool_calls_in_real_execution_triggers_alert(self):
+        """Repeated tool calls executed via actual execution flow trigger Watchdog alert at threshold."""
+        request_id = "req-repeat-flow"
+
+        for i in range(1, 6):
+            self.mock_provider.predefined_responses.append(
+                LLMResponse(
+                    content=f"Calculating iteration {i}...",
+                    tool_calls=[
+                        ToolCall(
+                            id=f"call_rep_{i}",
+                            name="calculator",
+                            arguments={"expression": "2 * 2"}
+                        )
+                    ]
+                )
+            )
+
+            request = GatewayRequest(
+                request_id=request_id,
+                session_id="sess-repeat",
+                messages=[{"role": "user", "content": "Calculate 2 * 2"}]
+            )
+
+            await self.gateway.handle_request(request)
+
+        # 5 calls reached threshold = 5
+        self.assertEqual(len(self.watchdog.alerts), 1)
+        alert = self.watchdog.alerts[0]
+        self.assertEqual(alert["request_id"], request_id)
+        self.assertEqual(alert["anomaly_type"], "repeated_tool_call")
+        self.assertEqual(alert["tool_name"], "calculator")
+        self.assertEqual(alert["count"], 5)
+
+    async def test_request_execution_isolation_in_real_execution(self):
+        """Tool calls across different requests in real execution remain isolated."""
+        # 3 calls for request A
+        for i in range(3):
+            self.mock_provider.predefined_responses.append(
+                LLMResponse(
+                    content="Calc A",
+                    tool_calls=[
+                        ToolCall(id=f"call_a_{i}", name="calculator", arguments={"expression": "1 + 1"})
+                    ]
+                )
+            )
+            await self.gateway.handle_request(
+                GatewayRequest(request_id="req-iso-A", messages=[{"role": "user", "content": "1+1"}])
+            )
+
+        # 3 calls for request B
+        for i in range(3):
+            self.mock_provider.predefined_responses.append(
+                LLMResponse(
+                    content="Calc B",
+                    tool_calls=[
+                        ToolCall(id=f"call_b_{i}", name="calculator", arguments={"expression": "1 + 1"})
+                    ]
+                )
+            )
+            await self.gateway.handle_request(
+                GatewayRequest(request_id="req-iso-B", messages=[{"role": "user", "content": "1+1"}])
+            )
+
+        # Neither request reached threshold 5
+        self.assertEqual(len(self.watchdog.alerts), 0)
+        self.assertEqual(len(self.watchdog.tool_history["req-iso-A"]), 3)
+        self.assertEqual(len(self.watchdog.tool_history["req-iso-B"]), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
+
