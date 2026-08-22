@@ -287,6 +287,7 @@ Day 2 is complete. The `EventStream → Event.payload → Watchdog` integration 
 
 ---
 
+
 ### Date: 2026-08-21
 
 **Experiment / Decision:**
@@ -323,4 +324,256 @@ Connected the existing Watchdog to the actual execution flow by registering `Wat
 
 **Impact:**
 The Watchdog is now connected to events produced by the actual execution flow and repeated-tool-call detection has been verified using live execution events without breaking any Day 1/Day 2 contracts.
+
+=======
+### Date: 2026-08-18
+
+**Experiment / Decision:**
+Day 2 Provider and Tool Compatibility Audit with Gateway Event Contract
+
+**Context:**
+On Day 2, the team established the first shared Gateway + Event contract and execution pipeline (`src/gateway/`, `src/orchestration/`, `src/events/`, `src/state/`). Jyothi's Day 2 responsibility is to inspect the shared contract, compare the existing Day 1 provider/tool implementation (`src/providers/`, `src/tools/`) against it, perform any necessary compatibility adjustments, ensure all tests pass, and document the findings without over-implementing.
+
+**What was Inspected:**
+* Dinesh's Gateway router and request/response models (`src/gateway/router.py`, `src/gateway/models.py`)
+* Orchestrator execution flow (`src/orchestration/executor.py`)
+* Event schema and EventStream abstraction (`src/events/schema.py`, `src/events/stream.py`)
+* State management lifecycle (`src/state/manager.py`)
+* Watchdog anomaly detector integration seam (`src/watchdog/detector.py`, `tests/test_eventstream_watchdog_integration.py`)
+* Existing provider abstraction (`src/providers/base.py`, `src/providers/mock_provider.py`, `src/providers/__init__.py`)
+* Existing tool execution engine (`src/tools/base.py`, `src/tools/builtin.py`, `src/tools/executor.py`, `src/tools/registry.py`, `src/tools/__init__.py`)
+* Test suites across the entire repository (`tests/`)
+
+**Dinesh's Discovered Event / Execution Contract:**
+* **Gateway Request / Response Contract (`src/gateway/models.py`):**
+  * `GatewayRequest`: `request_id: str`, `messages: List[Dict[str, Any]]`, `session_id: str = ""`, `parameters: Dict[str, Any]`.
+  * `GatewayResponse`: `request_id: str`, `status: str`, `result: Optional[Any]`, `error: Optional[str]`, `execution_time_ms: float`.
+* **Orchestrator Execution Contract (`src/orchestration/executor.py`):**
+  * Invokes `self.provider.config.model_name` for `EXECUTION_STARTED` event emission.
+  * Unpacks messages into `LLMMessage(**msg)`.
+  * Retrieves tool schemas via `self.tool_executor.registry.get_schemas()`.
+  * Calls `await self.provider.generate(messages=llm_messages, tools=tools_schema)`.
+  * Checks `response.has_tool_calls` and iterates over `response.tool_calls`.
+  * Executes each tool via `await self.tool_executor.execute_tool_call(tool_call, request_id=request.request_id, session_id=request.session_id)`.
+  * Formats tool execution events via `tool_result.to_event_payload(request_id=request.request_id, session_id=request.session_id)` and publishes `Event(event_type=EventLifecycle.TOOL_EXECUTION, ...)`.
+  * Formats final output containing `content` and `tool_results` (`tool_result.to_dict()`).
+* **Event Schema Contract (`src/events/schema.py`):**
+  * `EventLifecycle` enum: `REQUEST_RECEIVED`, `EXECUTION_STARTED`, `TOOL_EXECUTION`, `COMPLETED`, `FAILED`.
+  * `Event` dataclass: `event_type: EventLifecycle`, `request_id: str`, `timestamp: float`, `payload: Dict[str, Any]`, `to_dict()`.
+* **EventStream & Watchdog Seam (`src/events/stream.py`):**
+  * `EventStream.publish(event)` stores `event` and synchronously dispatches `event.payload` to all registered subscribers (`subscribe(callable)`), directly connecting to `Watchdog.process_event(payload)`.
+
+**Compatibility Analysis:**
+1. **Provider Layer (`src/providers/`):**
+   * `LLMMessage`: Fields (`role`, `content`, `name`, `tool_call_id`) and `to_dict()` perfectly match `Orchestrator`'s instantiation and message formatting.
+   * `LLMResponse`: Attributes (`content`, `tool_calls`, `model`, `finish_reason`, `usage`, `raw_response`) and `@property has_tool_calls` match the exact access pattern in `Orchestrator.execute_flow`.
+   * `ToolCall`: Standardized fields (`id`, `name`, `arguments`) match the arguments expected by `ToolExecutor.execute_tool_call`.
+   * `ProviderConfig`: `model_name` and other configuration attributes are present and correctly read during execution.
+   * `MockProvider`: Asynchronous `generate()` signature and deterministic mock responses fully integrate with `Orchestrator`.
+2. **Tool Execution Layer (`src/tools/`):**
+   * `ToolRegistry`: `get_schemas()` generates standard OpenAPI-compatible schemas consumed by the LLM provider; `get()`, `has()`, and `register()` operate as expected.
+   * `ToolExecutor`: `execute_tool_call()` and `execute_many()` handle async execution, argument parsing, error containment, execution timing, and return `ToolResult`.
+   * `ToolResult`:
+     * `to_dict()` provides the structured dictionary format stored in orchestrator execution results.
+     * `to_event_payload(request_id, session_id)` produces the exact payload dictionary (`event_type: "tool_called"`, `request_id`, `tool_name`, `status`, `session_id`, `tool_call_id`, `execution_time_ms`, `error`, `timestamp`) expected by `EventLifecycle.TOOL_EXECUTION` and consumed by Koushik's `Watchdog.process_event()`.
+
+**Compatibility Changes Made:**
+No provider/tool implementation changes were required. The Day 1 provider abstraction and tool execution interfaces were designed with high cohesion and clean boundaries, making them 100% compatible out-of-the-box with Dinesh's Day 2 Gateway/Event contract and Koushik's Watchdog.
+
+**Files Changed:**
+* `experimental_log.md` — Updated with Jyothi's Day 2 inspection, compatibility audit, and validation record.
+* `logs/log.md` — Updated shared team log with verified Day 2 status.
+
+**Tests Performed:**
+* Ran full repository test suite (`python -m unittest discover -v -s tests`):
+  * `test_providers.py`: 6 tests passed (unit tests for message serialization, response properties, env config, mock text/tool generation).
+  * `test_tools.py`: 10 tests passed (unit tests for registry, schemas, calculator/echo execution, error handling, async concurrency, event payload formatting).
+  * `test_provider_tools_flow.py`: 1 test passed (integration test verifying LLM request → MockProvider → ToolExecutor → ToolResult → Watchdog alert).
+  * `test_gateway_orchestration.py`: 2 tests passed (Gateway → Orchestrator → Provider/Tool execution flow, state tracking, and lifecycle events).
+  * `test_watchdog.py`: 5 tests passed (Watchdog anomaly detection unit tests).
+  * `test_eventstream_watchdog_integration.py`: 4 tests passed (EventStream subscribe seam and payload dispatch to Watchdog).
+  * **Total: 28 tests passing (0 failures, 0 errors, 0.144s).**
+
+**Important Decisions & Deferred Scope:**
+* Adhered strictly to the minimal compatibility rule: No unnecessary modifications were made just to generate code churn.
+* Live provider integration (e.g. OpenAI, Anthropic, Gemini SDKs), dynamic routing, and production tool policies remain scheduled for future implementation stages.
+
+**Final Status:**
+Completed. The provider and tool subsystem is fully compatible with Dinesh's Gateway/Event contract, verified with 28 passing tests, and ready for Day 3 integration.
+
+
+
+---
+
+### Date: 2026-08-16
+
+**Experiment / Decision:**
+Frontend Dashboard Scaffold — Placeholder-Driven Foundation
+
+**Context:**
+No API contract (Sayan) or event schema (Dinesh) existed yet at Day 1. The
+dashboard needed a starting structure that could be built and rendered
+end-to-end without depending on either.
+
+**Problem:**
+Building against guessed data shapes risks locking in an incorrect contract
+and violates the interface rule (don't invent APIs/event schemas before an
+owner defines them).
+
+**Initial Approach:**
+Considered hardcoding a "best guess" event/session shape to move faster.
+
+**Decision:**
+Rejected the best-guess approach. Built the dashboard scaffold with
+deliberately loose, optional-heavy types (`SessionInfo`, `ExecutionEvent`,
+`Metrics`, `WatchdogAlert` in `types.ts`) fed entirely by local
+`placeholderData.ts`, with every type file explicitly commented as
+PLACEHOLDER / not-final-contract.
+
+**Implementation:**
+* `frontend/dashboard/src/App.tsx` — wires placeholder data into layout
+* `frontend/dashboard/src/DashboardLayout.tsx`
+* `frontend/dashboard/src/components/{SessionPanel,EventStreamPanel,MetricsPanel,AlertsPanel}.tsx`
+* `frontend/dashboard/src/types.ts`
+* `frontend/dashboard/src/data/placeholderData.ts`
+* Vite + TypeScript + React project setup (`package.json`, `tsconfig.json`, `vite.config.ts`)
+
+**Reason:**
+Get a working, renderable dashboard shell in place without prematurely
+coupling to contracts that Sayan and Dinesh hadn't finalized yet — keeps the
+frontend independently developable per `CONTRIBUTION_GUIDE.md`.
+
+**Deferred:**
+* Real WebSocket/REST data
+* Event schema-accurate types
+* Watchdog alert format
+
+**Impact:**
+Dashboard renders end-to-end with placeholder data. Structure is in place to
+receive real contracts once they exist, without requiring a rewrite of the
+component tree.
+
+---
+
+### Date: 2026-08-18
+
+**Experiment / Decision:**
+Telemetry Event-Consumption Foundation — Mocked Event Source
+
+**Context:**
+Day 2 task (assigned scope): build the telemetry/event-consumption
+foundation — not the full dashboard — and define how execution
+events/status are represented for the frontend, using mocked events with no
+dependency on the real execution pipeline.
+
+**Problem:**
+`services/api` (Sayan) has no working `/execute` or `/stream/:execution_id`
+yet, so there's no real feed to connect to. At the same time, the existing
+placeholder types in `types.ts` are intentionally loose and don't reflect
+the real event contract Dinesh has since finalized (`src/events/schema.py`,
+`src/gateway/router.py`, `src/orchestration/executor.py`,
+`src/tools/base.py`, `src/state/manager.py`).
+
+**Investigation:**
+Read the actual backend event-producing code rather than guessing the
+contract:
+* `Event`/`EventLifecycle` envelope — `src/events/schema.py`
+* `request_received`/`completed`/`failed` payloads — `src/gateway/router.py`
+* `execution_started` payload — `src/orchestration/executor.py`
+* `tool_execution` payload — `ToolResult.to_event_payload()` in `src/tools/base.py`
+* execution status values (`pending`/`running`/`completed`/`failed`) — `src/state/manager.py`
+
+**Finding (flagged, not resolved):**
+`ToolResult.to_event_payload()` nests its own `request_id`, `timestamp`, and
+a literal `event_type: "tool_called"` inside the `tool_execution` payload —
+inconsistent with the outer envelope's `event_type`
+(`EventLifecycle.TOOL_EXECUTION`). Reproduced exactly as-is rather than
+silently normalized, and documented for Dinesh/Jyothi/Koushik.
+
+**Decision:**
+Created an isolated `frontend/dashboard/src/telemetry/` module:
+* `types.ts` — schema-accurate `GatewayEvent` discriminated union + `ExecutionStatus`/`statusForEvent`
+* `EventSource.ts` — transport-agnostic `subscribe`/`close` interface
+* `mockEvents.ts` — generates a realistic mocked execution event sequence
+* `MockEventSource.ts` — replays the mock sequence on a timer, implementing `EventSource`
+* `useTelemetryEvents.ts` — React hook accumulating events + derived per-request status
+* `index.ts`, `README.md`
+
+Deliberately **not** wired into `App.tsx`/`DashboardLayout.tsx`/existing
+panels or the existing `types.ts`/`placeholderData.ts` — that's dashboard
+integration work, out of scope for the event-consumption foundation task.
+
+**Reason:**
+Keep event representation and consumption decoupled from transport so a
+future `WebSocketEventSource` (once Sayan's `/stream/:execution_id` exists)
+can implement the same interface and drop in with zero consumer changes.
+
+**Validation:**
+* `npx tsc --noEmit` on the dashboard project — 0 errors.
+* Isolated Node smoke test of `mockEvents`/`MockEventSource`/`statusForEvent`
+  — verified event ordering (`request_received → execution_started →
+  tool_execution* → completed|failed`), payload shapes, the failure path, and
+  `MockEventSource` replay order. All assertions passed.
+* `npm run build` fails on a pre-existing scaffold gap (missing `index.html`)
+  unrelated to this change — not something this task covers.
+
+**Deferred:**
+* Wiring `telemetry/` into `DashboardLayout`/panels and reconciling with
+  existing `types.ts`/`placeholderData.ts`
+* Real WebSocket source — depends on Sayan's `/stream/:execution_id`
+* Resolving the `tool_called` vs `tool_execution` schema quirk — needs
+  Dinesh/Jyothi/Koushik
+
+**Impact:**
+Frontend now has a schema-accurate, independently testable
+event-consumption layer, ready to plug into the dashboard once panels move
+off placeholder data — without depending on the still-stubbed real pipeline.
+
+---
+
+### Date: 2026-08-20
+
+**Experiment / Decision:**
+Day 3 — Provider/Tool Integration Verification and Gateway Execution Boundary
+
+**Context:**
+Day 3 connected the Gateway/Orchestrator execution path with the existing provider/tool subsystem while keeping subsystem ownership and service boundaries intact.
+
+**What was verified:**
+* Gateway request handling and Orchestrator execution flow.
+* `BaseLLMProvider`, `MockProvider`, `LLMMessage`, `LLMResponse`, and `ToolCall` compatibility with the Orchestrator.
+* `ToolRegistry`, `ToolExecutor`, and `ToolResult` integration.
+* `ToolResult.to_event_payload()` → `Event(EventLifecycle.TOOL_EXECUTION)` → `EventStream` → `Watchdog.process_event()` mapping.
+* State transitions and lifecycle events: `REQUEST_RECEIVED → EXECUTION_STARTED → TOOL_EXECUTION → COMPLETED/FAILED`.
+
+**Execution Flow:**
+`Gateway → Orchestrator → Provider → ToolExecutor → ToolResult → EventStream → Watchdog → Gateway response`
+
+The provider and tool interfaces matched the existing Orchestrator contracts. No provider/tool implementation changes were required.
+
+**Gateway/API Boundary Decision:**
+The Python Gateway/Orchestration path remains independent of the Node.js API service. API-specific child-process/stdout handling was not kept inside the Python execution layer. `src/main.py` remains a Python execution entry point that wires the Python subsystems, while cross-service communication is deferred to an agreed integration mechanism in a later phase.
+
+**Coordination Finding:**
+The outer event uses `EventLifecycle.TOOL_EXECUTION`, while the payload contains `event_type: "tool_called"` for the existing Watchdog subscriber contract. This was verified as intentional and was not changed.
+
+**Validation:**
+Full repository test suite passed:
+
+`python -m unittest discover -v -s tests`
+
+**Result:** 28/28 tests passed, with 0 failures and 0 errors.
+
+**Deferred:**
+* Live OpenAI/Anthropic/Gemini provider SDK integration.
+* Production provider routing/fallback and expanded tool policies.
+* REST/WebSocket → Gateway integration.
+* Full Pathway streaming and advanced execution-state persistence/recovery.
+
+**Files Changed:**
+* `experimental_log.md` — Day 3 verification and architectural decision record.
+* `logs/log.md` — shared Day 3 status.
+
+**Final Status:**
+Day 3 provider/tool integration verification is complete. The existing Provider/Tool subsystem is compatible with the Gateway/Orchestration execution path, and the Python execution boundary remains decoupled from the Node.js API layer. Ready for Day 4.
 
