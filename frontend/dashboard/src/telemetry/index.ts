@@ -6,3 +6,6 @@ export * from "./EventSource";
 export * from "./mockEvents";
 export * from "./MockEventSource";
 export * from "./useTelemetryEvents";
+export * from "./liveTypes";
+export * from "./WebSocketEventSource";
+export * from "./useLiveExecution";

@@ -16,15 +16,22 @@
 
 import type { GatewayEvent } from "./types";
 
-export type TelemetryListener = (event: GatewayEvent) => void;
+// Day 3 update: parameterized over TEvent (defaulting to GatewayEvent) so
+// this interface can also describe a real source whose wire shape doesn't
+// (yet) match the schema-accurate GatewayEvent union — see
+// WebSocketEventSource.ts / liveTypes.ts for why that's needed today.
+// MockEventSource and existing consumers are unaffected: they never specify
+// a type argument, so they keep resolving to GatewayEvent exactly as before.
 
-/** Something the frontend can subscribe to for a live sequence of GatewayEvents. */
-export interface TelemetryEventSource {
+export type TelemetryListener<TEvent = GatewayEvent> = (event: TEvent) => void;
+
+/** Something the frontend can subscribe to for a live sequence of events. */
+export interface TelemetryEventSource<TEvent = GatewayEvent> {
   /**
-   * Registers a listener that will be called with each GatewayEvent as it
+   * Registers a listener that will be called with each event as it
    * arrives. Returns an unsubscribe function.
    */
-  subscribe(listener: TelemetryListener): () => void;
+  subscribe(listener: TelemetryListener<TEvent>): () => void;
 
   /** Stops the source (clears timers / closes sockets) and drops all listeners. */
   close(): void;
