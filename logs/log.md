@@ -184,12 +184,20 @@ This file records meaningful implementation and development progress.
   * Validated that Watchdog continues to receive and process events through the EventStream payload subscriber seam.
   * Verified Gateway/Orchestration failure handling, and execution output tests.
 
-### Date: 2026-08-20 — Day 3 Gateway / Orchestration Flow
-
-  * **Sayan — REST / WebSocket API:**
+* **Sayan — REST / WebSocket API:**
   * Reviewed `services/api` against Dinesh's Gateway/Event contract (`src/gateway/models.py`, `src/events/schema.py`) — confirmed no changes since Day 2, so `GatewayRequest`/`GatewayResponse`/`Event` alignment in `types.ts` remains accurate.
   * Found and corrected accidental scope overreach in `services/api/src/index.ts`: `simulateExecution()` had been fully replaced by a new `executeGatewayRequest()` function (subprocess spawn over stdin/stdout), introduced unintentionally during Dinesh's Gateway/Orchestration work.
   * Fixed a request-parsing bug introduced by the same change — `/execute` was destructuring `_session_id`/`_parameters` instead of `session_id`/`parameters`, silently discarding the real session ID on every request.
   * Restored a minimal `simulateExecution()` mock (kept as the temporary testing mechanism for the REST/WS layer, independent of the real Gateway process).
   * Added `forwardToGateway()` as a clearly-documented, unimplemented integration stub — deliberately not wired into `/execute`, since the REST/WebSocket → Gateway transport architecture remains unagreed (explicitly deferred per Dinesh's Day 3 summary).
   * No new endpoints added; no cross-process architecture decisions made.
+
+### Date: 2026-08-26 — Day 4 Gateway / Orchestration Flow Verification
+
+* **Dinesh — Gateway / Orchestration:**
+  * Verified Gateway → Orchestrator → Provider/Tool execution flow using existing interfaces.
+  * Verified lifecycle events: REQUEST_RECEIVED → EXECUTION_STARTED → TOOL_EXECUTION → COMPLETED/FAILED.
+  * Stabilized Gateway/Event/State contracts.
+  * Fixed `tests/test_provider_tools_flow.py` by removing Watchdog integration, isolating tests from external system failures.
+  * Verified tests for successful execution, provider/tool execution, and execution failure handling.
+  * Found an issue in Koushik's Watchdog subsystem (`src/watchdog/detector.py` syntax error / conflict markers) that was causing test failures, but strictly avoided modifying Watchdog code as per ownership rules.

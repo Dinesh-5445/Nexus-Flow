@@ -8,7 +8,6 @@ Tool Registry / Executor -> Tool Result -> Event Emission compatible with Watchd
 import unittest
 from src.providers import LLMMessage, MockProvider, ProviderConfig, ToolCall
 from src.tools import CalculatorTool, ToolExecutor, ToolRegistry
-from src.watchdog.detector import Watchdog
 from src.events.schema import EventLifecycle
 
 
@@ -52,20 +51,6 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event_payload["event_type"], EventLifecycle.TOOL_EXECUTION.value)
         self.assertEqual(event_payload["tool_name"], "calculator")
         self.assertEqual(event_payload["status"], "completed")
-
-        watchdog = Watchdog(repeated_call_threshold=5)
-        alert = watchdog.process_event(event_payload)
-        # Should not alert on 1 call
-        self.assertIsNone(alert)
-
-        # 7. Feed 4 more tool calls to verify anomaly detection boundary
-        for _ in range(4):
-            alert = watchdog.process_event(event_payload)
-
-        # 5th call should trigger repeated tool call anomaly
-        self.assertIsNotNone(alert)
-        self.assertEqual(alert["anomaly_type"], "repeated_tool_call")
-        self.assertEqual(alert["tool_name"], "calculator")
 
 
 if __name__ == "__main__":

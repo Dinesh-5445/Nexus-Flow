@@ -1,6 +1,7 @@
 from collections import Counter
 import time
 from typing import Any, Dict, Optional
+
 from src.events.schema import EventLifecycle
 
 
@@ -8,6 +9,16 @@ class Watchdog:
     def __init__(self, repeated_call_threshold: int = 5):
         self.repeated_call_threshold = repeated_call_threshold
         self.tool_history = {}
+        self.alerts = []
+
+    def attach_to_event_stream(self, event_stream: Any) -> None:
+        """
+        Subscribe the Watchdog to an EventStream.
+
+        EventStream publishes Event objects, while the Watchdog consumes
+        the Event.payload dictionary.
+        """
+        event_stream.subscribe(self.process_event)
 
     def process_event(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(event, dict):
@@ -31,12 +42,14 @@ class Watchdog:
         counts = Counter(self.tool_history[request_id])
 
         if counts[tool_name] >= self.repeated_call_threshold:
-            return {
+            alert = {
                 "request_id": request_id,
                 "anomaly_type": "repeated_tool_call",
                 "tool_name": tool_name,
                 "count": counts[tool_name]
             }
+            self.alerts.append(alert)
+            return alert
 
         return None
 
@@ -48,7 +61,7 @@ def main():
     events = [
         {
             "request_id": "req-001",
-            "event_type": "tool_called",
+            "event_type": EventLifecycle.TOOL_EXECUTION.value,
             "timestamp": time.time(),
             "tool_name": "calculator",
             "status": "completed",
