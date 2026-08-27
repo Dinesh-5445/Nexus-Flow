@@ -695,3 +695,46 @@ Day 4 task (assigned scope): Verify the existing provider and tool execution imp
 
 **Final Status:**
 Completed. The Provider and Tool subsystem foundation is fully verified, 100% compatible with Dinesh's Gateway/Orchestrator flow, passes all 38 test cases, and is clean and ready for Day 5.
+
+---
+
+### Date: 2026-08-27
+
+**Experiment / Decision:**
+Watchdog Day 4 — Execution Event Integration and Request Isolation Verification
+
+**Context:**
+The Watchdog had previously been adapted to the shared execution/event representation. The current repository baseline includes the stabilized Gateway → Orchestrator → Provider/Tool execution flow (`GatewayRouter` → `Orchestrator` → `ToolExecutor` → `ToolResult.to_event_payload()` → `EventStream`) and subscriber integration.
+
+**Objective:**
+Verify that the Watchdog observes events produced by the actual execution flow and that the existing repeated-tool-call detection correctly handles repeated calls while maintaining request isolation.
+
+**Verification:**
+- Verified Watchdog observation of events produced by the actual execution flow (`GatewayRouter` → `Orchestrator` → `ToolExecutor` → `ToolResult.to_event_payload()` → `EventStream` → `Watchdog.process_event()`).
+- Verified `EventStream` → `Watchdog` event delivery via `Watchdog.attach_to_event_stream(event_stream)` subscriber registration.
+- Verified repeated-tool-call detection using execution-flow events (5 repeated tool calls trigger `repeated_tool_call` alert at threshold = 5).
+- Verified request-based isolation of Watchdog tool history (`self.tool_history` dictionary keyed by `request_id`).
+- Verified compatibility with the current `EventLifecycle.TOOL_EXECUTION` (`"tool_execution"`) event representation.
+
+**Implementation / Changes:**
+No new production Watchdog code was required. The existing Watchdog implementation in `src/watchdog/detector.py` and real execution integration tests in `tests/test_watchdog.py` were verified against the updated Gateway/Orchestration execution baseline. No new anomaly types or detection logic were introduced.
+
+**Testing:**
+- `python -m pytest tests/test_watchdog.py -v` — 9 passed in 0.10s (5 unit tests + 4 real execution integration tests)
+- `python -m pytest tests/test_eventstream_watchdog_integration.py -v` — 4 passed in 0.05s
+- `python -m pytest -v` — 38 passed in 0.43s (full repository test suite)
+
+**Scope:**
+- Repeated-tool detection: verified.
+- Request isolation: verified.
+- Actual execution event integration: verified.
+- Timeout detection: not added.
+- Repeating workflow detection: not added.
+- Additional anomaly types: not added.
+- Anomaly scoring: not added.
+- Shared event schema redesign: not performed.
+- Unrelated architectural changes: not performed.
+
+**Impact:**
+The Watchdog has been verified against the current execution/event flow and observes relevant execution events while preserving the existing repeated-tool-call detection and request isolation behavior.
+
