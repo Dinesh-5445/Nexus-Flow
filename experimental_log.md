@@ -578,3 +578,19 @@ Full repository test suite passed:
 
 **Final Status:**
 Day 3 provider/tool integration verification is complete. The existing Provider/Tool subsystem is compatible with the Gateway/Orchestration execution path, and the Python execution boundary remains decoupled from the Node.js API layer. Ready for Day 4.
+
+### Date: 2026-08-26
+**Experiment / Decision:**
+API Service — Gateway Integration Review & Scope Correction
+
+**Context:**
+Day 3 instructions: review the API against Dinesh's latest Gateway/Event contract, fix only actual mismatches, keep the mock execution engine as a temporary testing mechanism, prepare (not implement) the API's Gateway integration point, and avoid inventing cross-process architecture or new endpoints.
+
+**Problem:**
+Checked `src/gateway/models.py` for changes since Day 2 — none found initially. While preparing the integration point, discovered that `services/api/src/index.ts` had been modified outside the original scope: `simulateExecution()` had been fully replaced by a new `executeGatewayRequest()` function (spawning the Python Gateway as a subprocess over stdin/stdout), and a destructuring bug was introduced — `/execute` was reading `_session_id`/`_parameters` (underscore-prefixed) from the request body instead of `session_id`/`parameters`, silently discarding the real session ID on every request.
+
+**Decision:**
+Removed the out-of-scope `executeGatewayRequest`/`spawn`/`path` code. Restored a minimal `simulateExecution()` mock, since it remains useful for testing the REST/WS layer independently of the real Gateway process. Fixed the `session_id`/`parameters` destructuring bug. Added `forwardToGateway()` as an honest, unimplemented, clearly-documented integration stub — deliberately not wired into `/execute`, since the real REST/WebSocket → Gateway transport architecture remains unagreed.
+
+**Impact:**
+`services/api` is back to a consistent, testable state: mock execution restored, request parsing bug fixed, and a clearly-marked (but unimplemented) seam exists for future real Gateway integration — without prematurely committing to a transport/protocol decision that hasn't been agreed by the team.
