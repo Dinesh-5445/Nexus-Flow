@@ -657,3 +657,19 @@ Removed the out-of-scope `executeGatewayRequest`/`spawn`/`path` code. Restored a
 
 **Impact:**
 `services/api` is back to a consistent, testable state: mock execution restored, request parsing bug fixed, and a clearly-marked (but unimplemented) seam exists for future real Gateway integration — without prematurely committing to a transport/protocol decision that hasn't been agreed by the team.
+
+### Date: 2026-08-28
+**Experiment / Decision:**
+API Service — Execution State Alignment
+
+**Context:**
+Day 4 instructions: finish pending Day 3 work, align `/execute`, `/status`, and WebSocket with the latest Gateway/Event contract, prepare the API → Gateway integration point, no new endpoints or architecture.
+
+**Problem:**
+Checked `src/gateway/models.py` and `src/events/schema.py` — no changes since Day 2, confirmed via commit history. However, found `src/state/manager.py` defines an `ExecutionState` shape (`request_id`, `status: 'pending'|'running'|'completed'|'failed'`, `start_time`, `end_time`, `error`) that `/status/:execution_id` didn't match — it was returning a bare `{request_id, status}` using internal `EventLifecycle` values (`request_received`, `execution_started`, etc.) instead of the real state vocabulary.
+
+**Decision:**
+Replaced the plain status map with `InternalExecutionState` (added to `types.ts`), tracking `start_time`/`end_time`/`status` per request. Added `toExecutionStateStatus()` to map internal `EventLifecycle` values to the real `pending`/`running`/`completed`/`failed` vocabulary. Updated `/execute` to initialize state and `/status/:execution_id` to return the full state object. Verified via Postman: `/execute` returns `202` with correct mocked response, `/status` correctly reflects `pending` → `completed` with populated timestamps after the mock execution sequence finishes.
+
+**Impact:**
+`/status/:execution_id` now returns data consistent with the real `ExecutionState` contract, so clients (dashboard, future Gateway-backed responses) get a predictable status vocabulary regardless of whether the mock or real execution path is active.

@@ -201,3 +201,12 @@ This file records meaningful implementation and development progress.
   * Fixed `tests/test_provider_tools_flow.py` by removing Watchdog integration, isolating tests from external system failures.
   * Verified tests for successful execution, provider/tool execution, and execution failure handling.
   * Found an issue in Koushik's Watchdog subsystem (`src/watchdog/detector.py` syntax error / conflict markers) that was causing test failures, but strictly avoided modifying Watchdog code as per ownership rules.
+
+### Date: 2026-08-28 — Day 4 Gateway / Orchestration Flow Verification
+* **Sayan — REST / WebSocket API:**
+  * Checked `src/gateway/models.py` and `src/events/schema.py` for changes since Day 2 — none found (verified via commit history), so `GatewayRequest`/`GatewayResponse`/`Event` alignment remains accurate.
+  * Found `src/state/manager.py` defines an `ExecutionState` contract (`request_id`, `status: 'pending'|'running'|'completed'|'failed'`, `start_time`, `end_time`, `error`) that `/status/:execution_id` did not match — it was returning internal `EventLifecycle` values instead of the real state vocabulary.
+  * Added `InternalExecutionState` to `types.ts` and a mapping function (`toExecutionStateStatus`) from internal lifecycle events to the real `pending`/`running`/`completed`/`failed` states.
+  * Updated `/execute` and `/status/:execution_id` to track and return `start_time`/`end_time`/`status` consistent with `ExecutionState`.
+  * Verified end-to-end via Postman: `/execute` → `202` mocked response, `/status` correctly transitions `pending` → `completed` with populated timestamps.
+  * No new endpoints or cross-process architecture introduced.
