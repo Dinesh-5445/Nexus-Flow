@@ -8,6 +8,17 @@ export type EventLifecycle =
 | "completed"
 | "failed";
 
+// Internal execution state, mirroring the shape of Dinesh's ExecutionState
+// (src/state/manager.py), but populated locally since the mock/stub
+// execution path doesn't yet talk to the real StateManager.
+export interface InternalExecutionState {
+  request_id: string;
+  status: string; // 'pending' | 'running' | 'completed' | 'failed'
+  start_time: number;
+  end_time?: number;
+  error?: string;
+}
+
 // Mirrors Dinesh's Event dataclass
 export interface ExecutionEvent {
     event_type: EventLifecycle;

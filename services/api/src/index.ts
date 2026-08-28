@@ -2,15 +2,12 @@ import express, {Request, Response} from "express";
 import http from "http";
 import { WebSocketServer, WebSocket as WsWebSocket } from "ws";
 import { randomUUID } from "crypto";
-import { spawn } from "child_process";
-import path from "path";
-import { GatewayRequest, GatewayResponse, ExecutionEvent, EventLifecycle } from "./types";
+import { GatewayRequest, GatewayResponse, ExecutionEvent, EventLifecycle, InternalExecutionState } from "./types";
 
 const app = express();
 app.use(express.json());
 
-// In-memory placeholder state (foundation only, not for production)
-const executionStatus = new Map<string, string>();
+const executionStatus = new Map<string, InternalExecutionState>();
 const streamClients = new Map<string, Set<WsWebSocket>>();
 
 // -- REST --
@@ -18,31 +15,38 @@ app.get("/health", (req: Request, res: Response) => {
     res.json({status: "ok"});
 });
 
-// Client submits a task. Stubbed for now - no real gateway call yet
+// Client submits a task.  Uses simulateExecution() for now — kept as a
+// minimal mock so the REST/WS layer can be tested independently of the
+// real Gateway/Orchestrator process. Real integration point is
+// forwardToGateway() below, not yet wired in (architecture not agreed).
 app.post("/execute", (req: Request, res: Response) => {
-  const {request_id, messages, _session_id, _parameters} = req.body;
+  const { request_id, messages, session_id, parameters } = req.body;
 
-  if(!request_id || !Array.isArray(messages)) {
+  if (!request_id || !Array.isArray(messages)) {
     return res.status(400).json({
       error: "Missing required fields: request_id, messages",
     });
-  };
+  }
 
-  executionStatus.set(request_id, "request_received");
+  executionStatus.set(request_id, {
+    request_id,
+    status: "pending",
+    start_time: Date.now() / 1000
+  });
 
   // Mocked Gateway Response
   const mockResponse: GatewayResponse = {
     request_id,
     status: "started",
-    execution_time_ms: 0
+    execution_time_ms: 0,
   };
 
   res.status(202).json({
     ...mockResponse,
-    stream_url: `/stream/${request_id}`
+    stream_url: `/stream/${request_id}`,
   });
 
-  executeGatewayRequest(request_id, messages, _session_id || "default-session");
+  simulateExecution(request_id);
 });
 
 // Polling fallback for status (alternative to WS stream)
@@ -54,7 +58,7 @@ app.get("/status/:execution_id", (req: Request<{ execution_id : string }>, res: 
       return res.status(404).json({error: "Unknown execution_id"});
     };
 
-    res.json({request_id: execution_id, status});
+    res.json(status);
 });
 
 // -- WebSocket --
@@ -84,6 +88,29 @@ server.on("upgrade", (req, socket, head) => {
   });
 });
 
+// Maps internal EventLifecycle values to the real ExecutionState status
+// vocabulary (src/state/manager.py): 'pending' | 'running' | 'completed' | 'failed'
+const toExecutionStateStatus = (eventType: string) => {
+  switch(eventType) {
+    case "request_received":
+      return "pending";
+    
+    case "execution_started":
+    case "tool_execution" :
+      return "running";
+    
+    case "completed" :
+      return "completed";
+    
+    case "failed" :
+      return "failed";
+    
+    default:
+      return "pending";
+  }
+}
+
+
 const emitEvent = (requestId: string, eventType: EventLifecycle, payload?: Record<string, unknown>) => {
   const event: ExecutionEvent = {
     event_type: eventType,
@@ -92,10 +119,17 @@ const emitEvent = (requestId: string, eventType: EventLifecycle, payload?: Recor
     ...(payload !== undefined && { payload })
   };
 
-  executionStatus.set(requestId, eventType);
+  const state = executionStatus.get(requestId);
 
+  if(state) {
+    state.status = toExecutionStateStatus(eventType);
+
+    if(eventType === "completed" || eventType === "failed") {
+      state.end_time = Date.now() / 1000;
+    }
+  }
+  
   const clients = streamClients.get(requestId);
-
   if(!clients) return;
 
   const message = JSON.stringify(event);
@@ -107,46 +141,30 @@ const emitEvent = (requestId: string, eventType: EventLifecycle, payload?: Recor
   }
 }
 
-const executeGatewayRequest = (requestId: string, messages: any[], sessionId: string) => {
-  // Spawn the Python Gateway script from the repository root
-  const rootDir = path.resolve(__dirname, "../../..");
-  const pyProcess = spawn("python", ["-m", "src.main"], {
-    cwd: rootDir
-  });
+// Mocked event sequence standing in for real Gateway/Orchestrator events.
+// Matches Dinesh's EventLifecycle enum exactly. Temporary testing
+// mechanism only.
+const simulateExecution = (requestId: string) => {
+  const steps: EventLifecycle[] = [
+    "request_received",
+    "execution_started",
+    "tool_execution",
+    "completed",
+  ];
 
-  const reqObj = {
-    request_id: requestId,
-    session_id: sessionId,
-    messages: messages
-  };
-
-  pyProcess.stdin.write(JSON.stringify(reqObj) + "\n");
-  pyProcess.stdin.end();
-
-  pyProcess.stdout.on("data", (data: Buffer) => {
-    const lines = data.toString().split("\n");
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (parsed.__type__ === "GatewayResponse") {
-          // Execution completed
-          executionStatus.set(requestId, parsed.status);
-        } else if (parsed.event_type) {
-          // Real emitted event
-          emitEvent(requestId, parsed.event_type as EventLifecycle, parsed.payload);
-        }
-      } catch (e) {
-        console.error("Failed to parse python stdout:", trimmed);
-      }
-    }
-  });
-
-  pyProcess.stderr.on("data", (data: Buffer) => {
-    console.error("Python stderr:", data.toString());
+  steps.forEach((eventType, i) => {
+    setTimeout(() => emitEvent(requestId, eventType), (i + 1) * 500);
   });
 };
+
+// Placeholder for the real Gateway integration point.
+// Transport/protocol (HTTP, gRPC, subprocess+stdio, queue, etc.) is not
+// yet agreed as the official REST/WebSocket -> Gateway architecture —
+// do not assume one here. Currently unused; /execute still uses
+// simulateExecution() for mocked responses.
+async function forwardToGateway(request: GatewayRequest): Promise<GatewayResponse> {
+  throw new Error("Gateway integration not implemented yet");
+}
 
 const PORT = process.env.PORT || 3000;
 

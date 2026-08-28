@@ -204,8 +204,12 @@ This file records meaningful implementation and development progress.
   * Validated real execution integration tests in `tests/test_watchdog.py` verifying live event processing, repeated tool call alert generation, and request isolation.
 
 * **Sayan — REST / WebSocket API:**
-  * Maintained Express + `ws` API platform under `services/api/` with schema-accurate TypeScript contracts matching Python event definitions.
-  * Endpoints operational for `/execute`, `/status/:execution_id`, and `/stream/:execution_id`.
+  * Checked `src/gateway/models.py` and `src/events/schema.py` for changes since Day 2 — none found (verified via commit history), so `GatewayRequest`/`GatewayResponse`/`Event` alignment remains accurate.
+  * Found `src/state/manager.py` defines an `ExecutionState` contract (`request_id`, `status: 'pending'|'running'|'completed'|'failed'`, `start_time`, `end_time`, `error`) that `/status/:execution_id` did not match — it was returning internal `EventLifecycle` values instead of the real state vocabulary.
+  * Added `InternalExecutionState` to `types.ts` and a mapping function (`toExecutionStateStatus`) from internal lifecycle events to the real `pending`/`running`/`completed`/`failed` states.
+  * Updated `/execute` and `/status/:execution_id` to track and return `start_time`/`end_time`/`status` consistent with `ExecutionState`.
+  * Verified end-to-end via Postman: `/execute` → `202` mocked response, `/status` correctly transitions `pending` → `completed` with populated timestamps.
+  * No new endpoints or cross-process architecture introduced.
 
 * **Harshit — Frontend / Dashboard / Telemetry:**
   * Implemented live telemetry execution monitoring in `frontend/dashboard/` (`ExecutionMonitor.tsx`, `WebSocketEventSource.ts`, `liveTypes.ts`, `useLiveExecution.ts`).
@@ -220,7 +224,7 @@ This file records meaningful implementation and development progress.
 * EventStream → Watchdog dispatch seam: **Integrated & Validated**
 * Watchdog live execution integration: **Connected & Validated**
 * Pathway event-stream integration: **Deferred (Post-Core Stabilization)**
-* REST/WebSocket Gateway integration: **In Progress / API Foundation Operational**
+* REST/WebSocket Gateway integration: **Foundation Operational, State Contract Aligned — Real Integration Pending**
 * Telemetry event representation & live consumption: **Implemented & Validated**
 * Dashboard UI integration: **Live Telemetry Monitor Implemented**
 * End-to-end Gateway-Provider-Tool-Watchdog flow: **Verified & Operational**
