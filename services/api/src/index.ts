@@ -2,13 +2,12 @@ import express, {Request, Response} from "express";
 import http from "http";
 import { WebSocketServer, WebSocket as WsWebSocket } from "ws";
 import { randomUUID } from "crypto";
-import { GatewayRequest, GatewayResponse, ExecutionEvent, EventLifecycle } from "./types";
+import { GatewayRequest, GatewayResponse, ExecutionEvent, EventLifecycle, InternalExecutionState } from "./types";
 
 const app = express();
 app.use(express.json());
 
-// In-memory placeholder state (foundation only, not for production)
-const executionStatus = new Map<string, string>();
+const executionStatus = new Map<string, InternalExecutionState>();
 const streamClients = new Map<string, Set<WsWebSocket>>();
 
 // -- REST --
@@ -29,7 +28,11 @@ app.post("/execute", (req: Request, res: Response) => {
     });
   }
 
-  executionStatus.set(request_id, "request_received");
+  executionStatus.set(request_id, {
+    request_id,
+    status: "pending",
+    start_time: Date.now() / 1000
+  });
 
   // Mocked Gateway Response
   const mockResponse: GatewayResponse = {
@@ -55,7 +58,7 @@ app.get("/status/:execution_id", (req: Request<{ execution_id : string }>, res: 
       return res.status(404).json({error: "Unknown execution_id"});
     };
 
-    res.json({request_id: execution_id, status});
+    res.json(status);
 });
 
 // -- WebSocket --
@@ -85,6 +88,29 @@ server.on("upgrade", (req, socket, head) => {
   });
 });
 
+// Maps internal EventLifecycle values to the real ExecutionState status
+// vocabulary (src/state/manager.py): 'pending' | 'running' | 'completed' | 'failed'
+const toExecutionStateStatus = (eventType: string) => {
+  switch(eventType) {
+    case "request_received":
+      return "pending";
+    
+    case "execution_started":
+    case "tool_execution" :
+      return "running";
+    
+    case "completed" :
+      return "completed";
+    
+    case "failed" :
+      return "failed";
+    
+    default:
+      return "pending";
+  }
+}
+
+
 const emitEvent = (requestId: string, eventType: EventLifecycle, payload?: Record<string, unknown>) => {
   const event: ExecutionEvent = {
     event_type: eventType,
@@ -93,10 +119,17 @@ const emitEvent = (requestId: string, eventType: EventLifecycle, payload?: Recor
     ...(payload !== undefined && { payload })
   };
 
-  executionStatus.set(requestId, eventType);
+  const state = executionStatus.get(requestId);
 
+  if(state) {
+    state.status = toExecutionStateStatus(eventType);
+
+    if(eventType === "completed" || eventType === "failed") {
+      state.end_time = Date.now() / 1000;
+    }
+  }
+  
   const clients = streamClients.get(requestId);
-
   if(!clients) return;
 
   const message = JSON.stringify(event);
