@@ -12,6 +12,7 @@ from typing import Any, Dict
 class EventLifecycle(str, Enum):
     REQUEST_RECEIVED = "request_received"
     EXECUTION_STARTED = "execution_started"
+    LLM_EXECUTION = "llm_execution"
     TOOL_EXECUTION = "tool_execution"
     COMPLETED = "completed"
     FAILED = "failed"

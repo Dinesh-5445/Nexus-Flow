@@ -78,18 +78,19 @@ class TestGatewayOrchestrationFlow(unittest.IsolatedAsyncioTestCase):
         
         # Verify Events
         events = self.event_stream.published_events
-        self.assertEqual(len(events), 4)
+        self.assertEqual(len(events), 5)
         
         event_types = [e.event_type for e in events]
         self.assertEqual(event_types, [
             EventLifecycle.REQUEST_RECEIVED,
             EventLifecycle.EXECUTION_STARTED,
+            EventLifecycle.LLM_EXECUTION,
             EventLifecycle.TOOL_EXECUTION,
             EventLifecycle.COMPLETED
         ])
         
         # Check specific event payload
-        tool_event = events[2]
+        tool_event = events[3]
         self.assertEqual(tool_event.event_type, EventLifecycle.TOOL_EXECUTION)
         self.assertEqual(tool_event.payload["tool_name"], "calculator")
         self.assertEqual(tool_event.payload["status"], "completed")
