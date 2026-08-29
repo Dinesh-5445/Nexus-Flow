@@ -7,10 +7,11 @@ import { useLiveExecution } from "../telemetry/useLiveExecution";
 // placeholder-fed panels per today's scope — no visual polish, no full
 // dashboard integration yet.
 //
-// Shows: execution ID, derived status, ordered lifecycle events, and basic
-// timing (elapsed time since the first observed event). Event payloads are
-// NOT rendered — the live stream doesn't send any today (see
-// telemetry/liveTypes.ts for the contract-mismatch note), so there is
+// Shows: execution ID, authoritative status/end time/error (Day 4: from
+// GET /status/:execution_id, see useLiveExecution.ts), ordered lifecycle
+// events, and basic timing (elapsed time since the first observed event).
+// Event payloads are NOT rendered — the live stream doesn't send any today
+// (see telemetry/liveTypes.ts for the contract-mismatch note), so there is
 // nothing real to show without inventing it.
 
 function formatElapsed(fromSeconds: number, toSeconds: number): string {
@@ -73,7 +74,12 @@ export default function ExecutionMonitor() {
         <div>
           <p>Execution ID: {live.requestId}</p>
           <p>Status: {live.status}</p>
+          {live.endedAt !== null && live.startedAt !== null && (
+            <p>Total duration: {formatElapsed(live.startedAt, live.endedAt)}</p>
+          )}
+          {live.error && <p role="alert">Execution error: {live.error}</p>}
           {live.connectionError && <p role="alert">Stream error: {live.connectionError}</p>}
+          {live.statusError && <p role="alert">Status fetch error: {live.statusError}</p>}
 
           <h3>Lifecycle events</h3>
           {live.events.length === 0 ? (
