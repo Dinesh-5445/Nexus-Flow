@@ -789,3 +789,52 @@ Replaced the plain status map with `InternalExecutionState` (added to `types.ts`
 
 **Impact:**
 `/status/:execution_id` now returns data consistent with the real `ExecutionState` contract, so clients (dashboard, future Gateway-backed responses) get a predictable status vocabulary regardless of whether the mock or real execution path is active.
+
+---
+
+### Date: 2026-08-28
+
+**Experiment / Decision:**
+Telemetry — Live Execution Status Contract Alignment
+
+**Context:**
+Day 4 instructions: finalize event representation, build a minimal execution/status/event view, connect to the available WebSocket/mock stream, no dashboard redesign. `ExecutionMonitor.tsx`/`useLiveExecution.ts` (Day 3) already consumed Sayan's `/stream/:execution_id` WebSocket for the raw event timeline, but derived `status` locally on the frontend via `statusForEvent()` (`telemetry/types.ts`), because no authoritative status endpoint existed yet at the time. Sayan's Day 4 work added a real `GET /status/:execution_id` returning `InternalExecutionState` (`request_id`, `status`, `start_time`, `end_time?`, `error?`), mirroring `src/state/manager.py`'s `ExecutionState` contract.
+
+**Problem:**
+With a real status contract now available, the frontend's local `statusForEvent()` derivation in `useLiveExecution.ts` was duplicating backend-owned business logic — something the architecture rules explicitly call out to avoid ("Frontend must not duplicate backend business logic"). Inspecting `services/api/src/index.ts`'s `toExecutionStateStatus()` mapping against the frontend's `statusForEvent()` also surfaced a real drift between the two: the frontend treated `EventLifecycle.REQUEST_RECEIVED` as `"running"`, while the backend/state contract keeps a request `"pending"` until `EXECUTION_STARTED`.
+
+**Decision:**
+Replaced the local status derivation in `useLiveExecution.ts` with a fetch of the authoritative `GET /status/:execution_id`, re-fetched whenever a new lifecycle event arrives on the WebSocket (the only available signal that server-side state may have changed, since there's no push-based status update today). Added `LiveExecutionStatus` and a structural guard `isLiveExecutionStatus()` to `telemetry/liveTypes.ts`, matching the real `/status/:execution_id` response shape — kept alongside `LiveGatewayEvent` in the same "what the wire actually sends today" file, consistent with the existing `types.ts` (schema-accurate) vs `liveTypes.ts` (actual wire shape) split. `useLiveExecution`'s returned state now includes `endedAt` and `error` sourced from `/status`, in addition to the existing event-derived `startedAt`/`lastEventAt`/`events`. `ExecutionMonitor.tsx` was updated to render the authoritative status, total duration once terminal, execution error, and a separate status-fetch error — no other visual changes.
+
+`useTelemetryEvents.ts` (Day 2, mock-only path) and its use of `statusForEvent()` were deliberately left untouched: that hook has no real backend to be authoritative about and exists purely to exercise UI against mocked data, so there's nothing to duplicate against.
+
+**What was Inspected:**
+* `services/api/src/index.ts` — `toExecutionStateStatus()`, `/status/:execution_id` handler, `emitEvent()`, `simulateExecution()`.
+* `services/api/src/types.ts` — `InternalExecutionState`.
+* `src/state/manager.py` (via `CONTRIBUTION_GUIDE.md`/prior log entries) — `ExecutionState` contract this mirrors.
+* `frontend/dashboard/src/telemetry/useLiveExecution.ts`, `liveTypes.ts`, `types.ts`, `WebSocketEventSource.ts`.
+* `frontend/dashboard/src/components/ExecutionMonitor.tsx`, `App.tsx`, `DashboardLayout.tsx`.
+* `frontend/dashboard/vite.config.ts` (confirmed `/status` is already proxied — no change needed).
+
+**Testing:**
+* `npx tsc --noEmit` in `frontend/dashboard/` — 0 errors.
+* Live smoke test: started `services/api` (`npx ts-node --transpile-only src/index.ts`), then from a standalone Node script mirroring `useLiveExecution`'s fetch pattern: `POST /execute` → `202`, then polled `GET /status/:id` on the same cadence the hook would (on start, then after each event) — observed `pending` → `running` → `completed` with `end_time` populated on the terminal poll, and every response validated against `isLiveExecutionStatus()`.
+* Live WebSocket smoke test: connected to `/stream/:id` and confirmed all four lifecycle events (`request_received`, `execution_started`, `tool_execution`, `completed`) still arrive with no `payload` key, i.e. `LiveGatewayEvent`/`isLiveGatewayEvent()` remain accurate and unaffected by this change.
+* Stopped the smoke-test server afterward; confirmed `/health` no longer responds.
+
+**Files Changed:**
+* `frontend/dashboard/src/telemetry/liveTypes.ts` — added `LiveExecutionStatus`, `isLiveExecutionStatus()`.
+* `frontend/dashboard/src/telemetry/useLiveExecution.ts` — replaced local `statusForEvent()`-based status derivation with `GET /status/:execution_id` polling; added `endedAt`, `error`, `statusError` to `LiveExecutionState`.
+* `frontend/dashboard/src/components/ExecutionMonitor.tsx` — render authoritative status fields; updated comments.
+* `frontend/dashboard/src/telemetry/README.md` — updated to describe the current mock-path/live-path split and the Day 4 status-contract change (was stale since Day 2).
+* `experimental_log.md` — this entry.
+* `logs/log.md` — added Harshit's Day 4 entry and updated the shared Current Status summary.
+
+**Scope Deliberately Deferred:**
+* Wiring `ExecutionMonitor`/`useLiveExecution` into `DashboardLayout.tsx`'s existing panels.
+* Rendering event payloads (still absent from the live stream — see `liveTypes.ts`).
+* Reconciling `useTelemetryEvents.ts` (mock path) with the live path into one hook.
+* Any change to `services/api` itself, or to the `payload`-omission gap flagged in `liveTypes.ts` (Sayan/Dinesh's).
+
+**Final Status:**
+Completed. The frontend's live execution status is now sourced from the authoritative `/status/:execution_id` contract instead of a locally-duplicated derivation, the drift that existed between the two has been fixed, and the minimal execution/status/event view (`ExecutionMonitor.tsx`) reflects the richer status contract without a dashboard redesign.

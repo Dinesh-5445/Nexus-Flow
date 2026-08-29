@@ -215,6 +215,16 @@ This file records meaningful implementation and development progress.
   * Implemented live telemetry execution monitoring in `frontend/dashboard/` (`ExecutionMonitor.tsx`, `WebSocketEventSource.ts`, `liveTypes.ts`, `useLiveExecution.ts`).
   * Connected live telemetry hook to dashboard layout and configured Vite dev server proxy.
 
+### Date: 2026-08-28 — Day 4 (Harshit): Telemetry Status Contract Alignment
+
+* **Harshit — Frontend / Dashboard / Telemetry:**
+  * Finalized the live execution-status representation: `useLiveExecution.ts` now sources `status`/`end_time`/`error` from Sayan's `GET /status/:execution_id` (`InternalExecutionState`, mirroring `src/state/manager.py`'s `ExecutionState`) instead of re-deriving status on the frontend from the last-seen lifecycle event.
+  * Found and fixed a real contract drift: the previous local derivation treated `REQUEST_RECEIVED` as `"running"`, while the backend/state contract keeps a request `"pending"` until `EXECUTION_STARTED` — confirmed against the live API's actual `pending → running → completed` transitions.
+  * Added `LiveExecutionStatus` + `isLiveExecutionStatus()` to `telemetry/liveTypes.ts`, matching the real `/status/:execution_id` response shape.
+  * Updated `ExecutionMonitor.tsx` to surface the authoritative status, total duration (once terminal), execution error, and status-fetch errors — no visual redesign.
+  * Verified via `tsc --noEmit` (0 errors) and a live smoke test against a running `services/api` instance: `POST /execute` → polled `GET /status/:id` through the full `pending → running → completed` transition with populated `end_time`, and verified the WebSocket `/stream/:id` events remain payload-less as documented.
+  * Not wired into `DashboardLayout.tsx`/existing panels — out of scope for today (see `App.tsx`/`telemetry/README.md`).
+
 ### Current Status
 
 * Gateway and orchestration foundation: **Integrated, Stabilized & Validated**
@@ -225,6 +235,6 @@ This file records meaningful implementation and development progress.
 * Watchdog live execution integration: **Connected & Validated**
 * Pathway event-stream integration: **Deferred (Post-Core Stabilization)**
 * REST/WebSocket Gateway integration: **Foundation Operational, State Contract Aligned — Real Integration Pending**
-* Telemetry event representation & live consumption: **Implemented & Validated**
+* Telemetry event representation & live consumption: **Implemented & Validated, Status Contract Aligned with `/status/:execution_id`**
 * Dashboard UI integration: **Live Telemetry Monitor Implemented**
 * End-to-end Gateway-Provider-Tool-Watchdog flow: **Verified & Operational**
