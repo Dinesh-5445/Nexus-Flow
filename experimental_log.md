@@ -936,3 +936,46 @@ Traced the canonical execution flow across the repository:
 
 **Final Status:**
 Completed. Existing Provider and Tool subsystems are 100% compatible with the canonical V1 Gateway → Orchestrator flow. All 38 repository tests passing.
+
+---
+
+### Date: 2026-08-30
+
+**Experiment / Decision:**
+Day 5 Watchdog — Real Execution Flow Event Consumption & Repeated-Tool Detection Verification
+
+**Context:**
+Koushik's assigned Day 5 task is to verify that the Watchdog subsystem correctly consumes events from the stabilized execution flow (`GatewayRouter` → `Orchestrator` → `ToolExecutor` → `ToolResult.to_event_payload()` → `EventStream`), verify repeated-tool-call detection against actual execution events, verify request isolation, keep existing anomaly detection logic intact without introducing new anomaly types or scoring models, and ensure all Watchdog unit and integration tests pass cleanly against the authoritative repository baseline.
+
+**Inspection of Current Baseline:**
+- **Execution Flow:** `GatewayRouter.handle_request()` triggers `Orchestrator.execute_flow()`, which executes tool calls via `ToolExecutor.execute_tool_call()`.
+- **Event Emission:** Upon tool execution, `Orchestrator` publishes an `Event(event_type=EventLifecycle.TOOL_EXECUTION, request_id=..., payload=tool_result.to_event_payload(...))` to `EventStream`.
+- **Event Payload Structure:** `tool_result.to_event_payload()` generates a dictionary containing `request_id`, `event_type` (`"tool_execution"`), `tool_name`, `status`, `session_id`, `tool_call_id`, `execution_time_ms`, `error`, and `timestamp`.
+- **Watchdog Subscription:** `Watchdog.attach_to_event_stream(event_stream)` registers `Watchdog.process_event` as an `EventStream` subscriber. When `event_stream.publish()` is called, `event.payload` is synchronously dispatched to `process_event`.
+- **Repeated-Tool Detection:** `Watchdog.process_event()` filters for `event_type == EventLifecycle.TOOL_EXECUTION.value` (`"tool_execution"`), extracts `request_id` and `tool_name`, updates `self.tool_history[request_id]`, and triggers a `repeated_tool_call` alert when `Counter(tool_history[request_id])[tool_name] >= repeated_call_threshold` (threshold = 5).
+- **Request Isolation:** `self.tool_history` is a dictionary keyed by `request_id`, ensuring independent tracking per request.
+
+**Verification Results:**
+1. **Real Execution Event Consumption:** Verified via `TestWatchdogRealExecutionIntegration.test_real_execution_event_reaches_watchdog` that execution initiated by `GatewayRouter` flows through `Orchestrator` → `ToolExecutor` → `EventStream` and reaches `Watchdog.process_event`.
+2. **Repeated-Tool Detection:** Verified via `TestWatchdogRealExecutionIntegration.test_repeated_tool_calls_in_real_execution_triggers_alert` that 5 repeated tool executions via the live gateway flow trigger a `repeated_tool_call` alert on the 5th execution.
+3. **Request Isolation:** Verified via `TestWatchdogRealExecutionIntegration.test_request_execution_isolation_in_real_execution` that 3 tool calls for Request A and 3 tool calls for Request B remain isolated without triggering alerts.
+4. **No Code Churn Policy:** The existing Watchdog implementation in `src/watchdog/detector.py` and existing tests in `tests/test_watchdog.py` and `tests/test_eventstream_watchdog_integration.py` fully satisfy all Day 5 requirements. Zero production code changes were required.
+
+**Scope Compliance:**
+- Repeated-tool detection verified: YES
+- Request isolation verified: YES
+- Actual execution events verified: YES
+- Timeout detection added: NO
+- Workflow detection added: NO
+- New anomaly types added: NO
+- Anomaly scoring added: NO
+- Shared event schema redesign: NO
+- Unrelated changes made: NO
+
+**Testing:**
+- `python -m pytest tests/test_watchdog.py -v`: 9/9 passed in 0.08s.
+- `python -m pytest -v`: 38/38 passed in 0.80s (full repository test suite).
+- `python -m compileall src tests`: 0 compilation/import errors.
+
+**Final Status:**
+DAY 5 COMPLETE. Watchdog correctly consumes events from the stabilized execution flow, repeated-tool detection and request isolation are fully verified against real execution events, and all 38 test cases pass cleanly.
