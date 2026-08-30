@@ -255,7 +255,11 @@ This file records meaningful implementation and development progress.
   * Updated `tests/test_provider_tools_flow.py` test assertions to account for the stabilized `LLM_EXECUTION` lifecycle event. Full test suite passing (38/38 tests).
 
 * **Koushik — Watchdog / Anomaly Detection:**
-  * Watchdog (`src/watchdog/detector.py`) verified against live execution stream events (`EventLifecycle.TOOL_EXECUTION`) with subscriber seam and repeated tool-call anomaly detection intact.
+  * Verified Watchdog (`src/watchdog/detector.py`) against stabilized execution flow events (`GatewayRouter` → `Orchestrator` → `ToolExecutor` → `ToolResult.to_event_payload()` → `EventStream` → `Watchdog.process_event()`).
+  * Confirmed repeated-tool-call detection works against actual execution events (5 repeated tool calls trigger `repeated_tool_call` alert at threshold 5).
+  * Confirmed request-based isolation (`self.tool_history` keyed by `request_id`).
+  * Kept existing anomaly detection logic intact without introducing new anomaly types or scoring models.
+  * Verified all Watchdog unit and integration tests passing (`tests/test_watchdog.py`, `tests/test_eventstream_watchdog_integration.py`).
 
 * **Sayan — REST / WebSocket API:**
   * Maintained Node.js + TypeScript REST and WebSocket services under `services/api` with `ExecutionState` contract alignment (`pending`/`running`/`completed`/`failed`).
@@ -271,7 +275,7 @@ This file records meaningful implementation and development progress.
 * Provider abstraction & Tool execution: **Integrated, Fully Compatible & Validated (38/38 tests passing)**
 * Tool Result → Orchestrator return: **Verified & Operational**
 * EventStream → Watchdog dispatch seam: **Integrated & Validated**
-* Watchdog live execution integration: **Connected & Validated**
+* Watchdog live execution integration: **Connected, Fully Verified & Operational (38/38 tests passing)**
 * Pathway event-stream integration: **Deferred (Post-Core Stabilization)**
 * REST/WebSocket Gateway integration: **Foundation Operational, State Contract Aligned — Real Integration Pending**
 * Telemetry event representation & live consumption: **Implemented & Validated**
