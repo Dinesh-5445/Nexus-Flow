@@ -838,3 +838,22 @@ Replaced the local status derivation in `useLiveExecution.ts` with a fetch of th
 
 **Final Status:**
 Completed. The frontend's live execution status is now sourced from the authoritative `/status/:execution_id` contract instead of a locally-duplicated derivation, the drift that existed between the two has been fixed, and the minimal execution/status/event view (`ExecutionMonitor.tsx`) reflects the richer status contract without a dashboard redesign.
+
+### Date: 2026-08-29
+
+**Experiment / Decision:**
+Day 5 Gateway / Orchestration Stabilization & Lifecycle Completeness
+
+**Context:**
+Dinesh's Day 5 task was to stabilize the execution flow and ensure the lifecycle event ordering was complete, specifically ensuring that `LLM_EXECUTION` is emitted during the provider generation step.
+
+**Problem:**
+The Orchestrator was emitting `EXECUTION_STARTED` and `TOOL_EXECUTION`, but was missing `LLM_EXECUTION` when interacting with the LLM provider, leading to incomplete lifecycle observability.
+
+**Decision:**
+Added `LLM_EXECUTION` to `EventLifecycle` in `src/events/schema.py`. Updated `Orchestrator.execute_flow()` in `src/orchestration/executor.py` to emit `LLM_EXECUTION` immediately after the provider generates a response.
+
+**Impact:**
+* The execution lifecycle is now complete: `REQUEST_RECEIVED` → `EXECUTION_STARTED` → `LLM_EXECUTION` / `TOOL_EXECUTION` → `COMPLETED`.
+* Dinesh-owned tests in `tests/test_gateway_orchestration.py` pass with the new event.
+* Tests in `tests/test_provider_tools_flow.py` (owned by Jyothi) fail because they assert an exact number of events (e.g., `len(events) == 1` or `2`). Per strict ownership boundaries, Jyothi's tests were intentionally not modified to fix these assertions.

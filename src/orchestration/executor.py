@@ -38,6 +38,15 @@ class Orchestrator:
         # 3. Call Provider layer
         response = await self.provider.generate(messages=llm_messages, tools=tools_schema)
         
+        # Emit LLM execution event
+        await self.event_stream.publish(
+            Event(
+                event_type=EventLifecycle.LLM_EXECUTION,
+                request_id=request.request_id,
+                payload={"model": self.provider.config.model_name, "usage": response.usage}
+            )
+        )
+        
         final_result = {"content": response.content, "tool_results": []}
         
         # 4. Handle Tool Executions
