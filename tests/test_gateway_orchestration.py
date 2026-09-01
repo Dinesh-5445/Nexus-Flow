@@ -120,6 +120,8 @@ class TestGatewayOrchestrationFlow(unittest.IsolatedAsyncioTestCase):
         
         # Verify Events (REQUEST_RECEIVED -> EXECUTION_STARTED -> FAILED)
         events = self.event_stream.published_events
+        # Filter for this specific request
+        events = [e for e in events if e.request_id == "req-bad"]
         self.assertEqual(len(events), 3)
         
         event_types = [e.event_type for e in events]
@@ -128,6 +130,79 @@ class TestGatewayOrchestrationFlow(unittest.IsolatedAsyncioTestCase):
             EventLifecycle.EXECUTION_STARTED,
             EventLifecycle.FAILED
         ])
+
+    async def test_provider_failure(self):
+        class FailingProvider(MockProvider):
+            async def generate(self, *args, **kwargs):
+                raise ValueError("Provider API is down")
+        
+        # Use a fresh event stream and state manager for this instance, or just swap the provider temporarily
+        original_provider = self.gateway.orchestrator.provider
+        self.gateway.orchestrator.provider = FailingProvider()
+        
+        request = GatewayRequest(
+            request_id="req-prov-fail",
+            messages=[{"role": "user", "content": "Hello"}]
+        )
+        
+        response = await self.gateway.handle_request(request)
+        
+        # Restore original provider
+        self.gateway.orchestrator.provider = original_provider
+        
+        # Verify Gateway Response caught the error
+        self.assertEqual(response.status, "failed")
+        self.assertIn("Provider API is down", response.error)
+        
+        # Verify State
+        state = self.state_manager.get_state("req-prov-fail")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.status, "failed")
+        
+        events = [e for e in self.event_stream.published_events if e.request_id == "req-prov-fail"]
+        self.assertEqual(len(events), 3)
+        event_types = [e.event_type for e in events]
+        self.assertEqual(event_types, [
+            EventLifecycle.REQUEST_RECEIVED,
+            EventLifecycle.EXECUTION_STARTED,
+            EventLifecycle.FAILED
+        ])
+
+    async def test_tool_failure(self):
+        self.mock_provider.predefined_responses.clear()
+        self.mock_provider.predefined_responses.append(
+            LLMResponse(
+                content="I will calculate that.",
+                tool_calls=[
+                    ToolCall(
+                        id="call_bad",
+                        name="calculator",
+                        arguments={"expression": "invalid math"}
+                    )
+                ]
+            )
+        )
+        
+        request = GatewayRequest(
+            request_id="req-tool-fail",
+            messages=[{"role": "user", "content": "Calculate something bad"}]
+        )
+        
+        response = await self.gateway.handle_request(request)
+        
+        # Overall request should succeed, but tool result will have failed
+        self.assertEqual(response.status, "success")
+        self.assertIsNotNone(response.result)
+        tool_res = response.result["tool_results"][0]
+        self.assertEqual(tool_res["status"], "failed")
+        self.assertIn("error", tool_res)
+        
+        events = [e for e in self.event_stream.published_events if e.request_id == "req-tool-fail"]
+        event_types = [e.event_type for e in events]
+        self.assertIn(EventLifecycle.TOOL_EXECUTION, event_types)
+        
+        tool_event = next(e for e in events if e.event_type == EventLifecycle.TOOL_EXECUTION)
+        self.assertEqual(tool_event.payload["status"], "failed")
 
 if __name__ == "__main__":
     unittest.main()
