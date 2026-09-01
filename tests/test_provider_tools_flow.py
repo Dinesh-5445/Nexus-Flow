@@ -80,11 +80,13 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["content"], "Mock response to: Explain NexusFlow architecture")
         self.assertEqual(result["tool_results"], [])
 
-        # Verify emitted lifecycle event
+        # Verify emitted lifecycle events (EXECUTION_STARTED -> LLM_EXECUTION)
         events = event_stream.published_events
-        self.assertEqual(len(events), 1)
+        self.assertEqual(len(events), 2)
         self.assertEqual(events[0].event_type, EventLifecycle.EXECUTION_STARTED)
         self.assertEqual(events[0].payload["provider_model"], "mock-gpt-4")
+        self.assertEqual(events[1].event_type, EventLifecycle.LLM_EXECUTION)
+        self.assertEqual(events[1].payload["model"], "mock-gpt-4")
 
     async def test_provider_tool_execution_flow_via_orchestrator(self):
         """B. TOOL EXECUTION CASE: Full flow with tool execution consumed and formatted by Orchestrator."""
@@ -111,13 +113,14 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_res["status"], "completed")
         self.assertEqual(tool_res["result"], {"expression": "10 + 20", "result": 30})
 
-        # Verify events emitted
+        # Verify events emitted (EXECUTION_STARTED -> LLM_EXECUTION -> TOOL_EXECUTION)
         events = event_stream.published_events
-        self.assertEqual(len(events), 2)
+        self.assertEqual(len(events), 3)
         self.assertEqual(events[0].event_type, EventLifecycle.EXECUTION_STARTED)
-        self.assertEqual(events[1].event_type, EventLifecycle.TOOL_EXECUTION)
-        self.assertEqual(events[1].payload["tool_name"], "calculator")
-        self.assertEqual(events[1].payload["status"], "completed")
+        self.assertEqual(events[1].event_type, EventLifecycle.LLM_EXECUTION)
+        self.assertEqual(events[2].event_type, EventLifecycle.TOOL_EXECUTION)
+        self.assertEqual(events[2].payload["tool_name"], "calculator")
+        self.assertEqual(events[2].payload["status"], "completed")
 
     async def test_provider_tool_execution_failure_handling(self):
         """C1. FAILURE CASE: Tool execution failure (e.g. division by zero) is safely contained and reported."""
@@ -156,8 +159,10 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
 
         # Event stream captures tool execution failure
         events = event_stream.published_events
-        self.assertEqual(len(events), 2)
-        tool_event = events[1]
+        self.assertEqual(len(events), 3)
+        self.assertEqual(events[0].event_type, EventLifecycle.EXECUTION_STARTED)
+        self.assertEqual(events[1].event_type, EventLifecycle.LLM_EXECUTION)
+        tool_event = events[2]
         self.assertEqual(tool_event.event_type, EventLifecycle.TOOL_EXECUTION)
         self.assertEqual(tool_event.payload["status"], "failed")
         self.assertIn("division by zero", tool_event.payload["error"])
@@ -196,8 +201,12 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
 
         # Event stream reflects unregistered tool error
         events = event_stream.published_events
-        self.assertEqual(events[1].payload["status"], "failed")
-        self.assertIn("is not registered", events[1].payload["error"])
+        self.assertEqual(len(events), 3)
+        self.assertEqual(events[0].event_type, EventLifecycle.EXECUTION_STARTED)
+        self.assertEqual(events[1].event_type, EventLifecycle.LLM_EXECUTION)
+        self.assertEqual(events[2].event_type, EventLifecycle.TOOL_EXECUTION)
+        self.assertEqual(events[2].payload["status"], "failed")
+        self.assertIn("is not registered", events[2].payload["error"])
 
     async def test_provider_invalid_arguments_failure_handling(self):
         """C3. FAILURE CASE: Invalid arguments to a tool return failed status."""
@@ -233,6 +242,15 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_res["status"], "failed")
         self.assertIn("Invalid tool arguments", tool_res["error"])
 
+        # Event stream reflects invalid tool arguments error
+        events = event_stream.published_events
+        self.assertEqual(len(events), 3)
+        self.assertEqual(events[0].event_type, EventLifecycle.EXECUTION_STARTED)
+        self.assertEqual(events[1].event_type, EventLifecycle.LLM_EXECUTION)
+        self.assertEqual(events[2].event_type, EventLifecycle.TOOL_EXECUTION)
+        self.assertEqual(events[2].payload["status"], "failed")
+        self.assertIn("Invalid tool arguments", events[2].payload["error"])
+
     async def test_provider_exception_propagation(self):
         """C4. FAILURE CASE: Provider-level exception propagates cleanly to caller/orchestrator."""
         class FailingProvider(BaseLLMProvider):
@@ -255,6 +273,10 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
             await orchestrator.execute_flow(request)
 
         self.assertIn("LLM Provider unreachable", str(ctx.exception))
+
+        events = event_stream.published_events
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].event_type, EventLifecycle.EXECUTION_STARTED)
 
 
 if __name__ == "__main__":

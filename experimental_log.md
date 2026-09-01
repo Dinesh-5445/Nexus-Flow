@@ -857,3 +857,125 @@ Added `LLM_EXECUTION` to `EventLifecycle` in `src/events/schema.py`. Updated `Or
 * The execution lifecycle is now complete: `REQUEST_RECEIVED` → `EXECUTION_STARTED` → `LLM_EXECUTION` / `TOOL_EXECUTION` → `COMPLETED`.
 * Dinesh-owned tests in `tests/test_gateway_orchestration.py` pass with the new event.
 * Tests in `tests/test_provider_tools_flow.py` (owned by Jyothi) fail because they assert an exact number of events (e.g., `len(events) == 1` or `2`). Per strict ownership boundaries, Jyothi's tests were intentionally not modified to fix these assertions.
+
+---
+
+### Date: 2026-08-30
+
+**Experiment / Decision:**
+Day 5 Provider / Tool Execution Validation Against Stabilized V1 Flow
+
+**Context:**
+On Day 5, Dinesh stabilized the canonical Gateway → Orchestrator → Provider/Tool execution flow (`src/gateway/router.py`, `src/orchestration/executor.py`) and integrated the `LLM_EXECUTION` lifecycle event into `EventLifecycle` (`src/events/schema.py`). Jyothi's assigned Day 5 responsibility is to validate that the existing provider abstraction layer (`src/providers/`) and tool execution subsystem (`src/tools/`) execute correctly inside this canonical V1 path, verify that tool execution results are reliably returned and consumed by the Orchestrator, ensure state/event contract compatibility, and fix only actual compatibility issues discovered during integration.
+
+**Inspection of Stabilized V1 Flow:**
+Traced the canonical execution flow across the repository:
+1. `GatewayRouter.handle_request(request: GatewayRequest)` initializes execution state (`StateManager.create_state()`), emits `EventLifecycle.REQUEST_RECEIVED`, updates status to `running`, and invokes `Orchestrator.execute_flow(request)`.
+2. `Orchestrator.execute_flow(request)`:
+   - Emits `EventLifecycle.EXECUTION_STARTED` with `provider_model`.
+   - Converts input messages into `[LLMMessage(**msg) for msg in request.messages]`.
+   - Fetches JSON schemas from `tool_executor.registry.get_schemas()`.
+   - Invokes `provider.generate(messages, tools)`.
+   - Emits `EventLifecycle.LLM_EXECUTION` with model name and usage metadata.
+   - If tool calls exist (`response.has_tool_calls`), iterates through `tool_call`s:
+     - Invokes `tool_executor.execute_tool_call(tool_call, request_id, session_id)`.
+     - Emits `EventLifecycle.TOOL_EXECUTION` with `tool_result.to_event_payload()`.
+     - Appends `tool_result.to_dict()` to `final_result["tool_results"]`.
+   - Returns `final_result` (`{"content": ..., "tool_results": [...]}`).
+3. `GatewayRouter` updates state to `completed`, emits `EventLifecycle.COMPLETED`, calculates duration, and returns `GatewayResponse(status="success", result=final_result, execution_time_ms=...)`.
+4. In failure scenarios, exceptions cleanly transition state to `failed` and emit `EventLifecycle.FAILED`.
+
+**Provider Subsystem Validation:**
+- Inspected `src/providers/base.py` and `src/providers/mock_provider.py`.
+- Verified `BaseLLMProvider`, `LLMMessage`, `LLMResponse`, `ToolCall`, and `ProviderConfig`.
+- Verified that `provider.generate()` correctly accepts converted `LLMMessage` objects and tool schemas, returns normalized `LLMResponse`, and safely provides `usage` metadata consumed by the Orchestrator's `LLM_EXECUTION` event.
+- Zero provider-side production code modifications required; 100% contract compatibility confirmed.
+
+**Tool Execution and Result Return Validation:**
+- Inspected `src/tools/base.py`, `src/tools/builtin.py`, `src/tools/executor.py`, and `src/tools/registry.py`.
+- Verified complete tool execution path: `Orchestrator` → `Provider` → `ToolCall` → `ToolExecutor.execute_tool_call()` → `BaseTool.execute()` → `ToolResult` → `Orchestrator` → `GatewayRouter`.
+- Verified that `ToolResult`:
+  - Accurately captures `tool_call_id`, `tool_name`, `status`, `result`, `error`, and `execution_time_ms`.
+  - Serializes to dictionary via `tool_result.to_dict()`, ensuring tool results are successfully returned to and embedded in `final_result["tool_results"]` without data loss.
+  - Generates event payloads via `tool_result.to_event_payload(request_id, session_id)` matching `EventLifecycle.TOOL_EXECUTION`.
+- Verified tool execution error containment: runtime exceptions (e.g. division by zero in `CalculatorTool`), unregistered tools, and invalid arguments (`TypeError`) return structured `ToolResult(status="failed", error="...")` without crashing the Orchestrator.
+- Zero tool-side production code modifications required; 100% contract compatibility confirmed.
+
+**Validation of Execution Scenarios:**
+1. **Success Case (Text Prompt):** Request `{"content": "Explain NexusFlow architecture"}` -> Provider returns text -> Orchestrator captures `content` with empty `tool_results` -> Emits `EXECUTION_STARTED` and `LLM_EXECUTION` -> Gateway returns `status="success"`.
+2. **Tool Execution Case:** Request `{"content": "Please calculate 10 + 20"}` -> Provider emits `ToolCall(calculator)` -> ToolExecutor evaluates expression -> Returns `ToolResult(status="completed", result={"expression": "10 + 20", "result": 30})` -> Orchestrator appends result -> Emits `EXECUTION_STARTED`, `LLM_EXECUTION`, and `TOOL_EXECUTION` -> Gateway returns `status="success"`.
+3. **Failure Cases:**
+   - Arithmetic Runtime Failure: Caught by ToolExecutor -> `ToolResult(status="failed", error="...")` -> Emits `TOOL_EXECUTION` with failure payload -> Orchestrator finishes cleanly.
+   - Unavailable/Unregistered Tool: ToolExecutor returns `ToolResult(status="failed", error="Tool '...' is not registered.")` -> Emits `TOOL_EXECUTION` with failure payload.
+   - Invalid Tool Arguments: `TypeError` contained by ToolExecutor -> `ToolResult(status="failed", error="Invalid tool arguments: ...")`.
+   - Provider Exception: Connection/provider errors propagate cleanly to Gateway -> State updated to `failed` -> Emits `FAILED` event.
+
+**Event / State Compatibility:**
+- Verified that provider and tool results align with `src/events/schema.py` (`Event`, `EventLifecycle`) and `src/state/manager.py` (`StateManager`, `ExecutionState`).
+- Standardized event sequence confirmed: `REQUEST_RECEIVED` → `EXECUTION_STARTED` → `LLM_EXECUTION` → `TOOL_EXECUTION` → `COMPLETED` (or `FAILED`).
+
+**Compatibility Changes & Scope:**
+- Updated event count and index assertions in `tests/test_provider_tools_flow.py` to recognize the new `EventLifecycle.LLM_EXECUTION` event emitted by the stabilized Orchestrator.
+- No production changes to `src/providers/` or `src/tools/`.
+- No new providers, tools, routing, caching, or multi-agent abstractions added.
+- No modifications to Dinesh's Gateway/Orchestrator, Koushik's Watchdog, Sayan's API, or Harshit's Frontend.
+
+**Files Changed:**
+- `tests/test_provider_tools_flow.py` — Updated test assertions for `LLM_EXECUTION` event ordering across success and failure flows.
+- `experimental_log.md` — Updated with Jyothi's Day 5 validation record.
+- `logs/log.md` — Updated shared team log with verified Day 5 progress.
+
+**Tests Performed:**
+- Full test suite: `python -m unittest discover -v -s tests` -> 38/38 tests passing (0 failures, 0 errors, 0.218s).
+- Subsystem tests: `python -m unittest tests/test_providers.py tests/test_tools.py tests/test_provider_tools_flow.py -v` -> 23/23 tests passing.
+- Gateway/Watchdog integration tests: `python -m unittest tests/test_gateway_orchestration.py tests/test_eventstream_watchdog_integration.py tests/test_watchdog.py -v` -> 15/15 tests passing.
+- Entry point smoke test: `python -m src.main` verified via JSON stdin for both text and tool requests.
+
+**Blockers / Coordination:**
+- None. Provider and Tool subsystems are fully integrated and verified with the stabilized V1 flow.
+
+**Final Status:**
+Completed. Existing Provider and Tool subsystems are 100% compatible with the canonical V1 Gateway → Orchestrator flow. All 38 repository tests passing.
+
+---
+
+### Date: 2026-08-30
+
+**Experiment / Decision:**
+Day 5 Watchdog — Real Execution Flow Event Consumption & Repeated-Tool Detection Verification
+
+**Context:**
+Koushik's assigned Day 5 task is to verify that the Watchdog subsystem correctly consumes events from the stabilized execution flow (`GatewayRouter` → `Orchestrator` → `ToolExecutor` → `ToolResult.to_event_payload()` → `EventStream`), verify repeated-tool-call detection against actual execution events, verify request isolation, keep existing anomaly detection logic intact without introducing new anomaly types or scoring models, and ensure all Watchdog unit and integration tests pass cleanly against the authoritative repository baseline.
+
+**Inspection of Current Baseline:**
+- **Execution Flow:** `GatewayRouter.handle_request()` triggers `Orchestrator.execute_flow()`, which executes tool calls via `ToolExecutor.execute_tool_call()`.
+- **Event Emission:** Upon tool execution, `Orchestrator` publishes an `Event(event_type=EventLifecycle.TOOL_EXECUTION, request_id=..., payload=tool_result.to_event_payload(...))` to `EventStream`.
+- **Event Payload Structure:** `tool_result.to_event_payload()` generates a dictionary containing `request_id`, `event_type` (`"tool_execution"`), `tool_name`, `status`, `session_id`, `tool_call_id`, `execution_time_ms`, `error`, and `timestamp`.
+- **Watchdog Subscription:** `Watchdog.attach_to_event_stream(event_stream)` registers `Watchdog.process_event` as an `EventStream` subscriber. When `event_stream.publish()` is called, `event.payload` is synchronously dispatched to `process_event`.
+- **Repeated-Tool Detection:** `Watchdog.process_event()` filters for `event_type == EventLifecycle.TOOL_EXECUTION.value` (`"tool_execution"`), extracts `request_id` and `tool_name`, updates `self.tool_history[request_id]`, and triggers a `repeated_tool_call` alert when `Counter(tool_history[request_id])[tool_name] >= repeated_call_threshold` (threshold = 5).
+- **Request Isolation:** `self.tool_history` is a dictionary keyed by `request_id`, ensuring independent tracking per request.
+
+**Verification Results:**
+1. **Real Execution Event Consumption:** Verified via `TestWatchdogRealExecutionIntegration.test_real_execution_event_reaches_watchdog` that execution initiated by `GatewayRouter` flows through `Orchestrator` → `ToolExecutor` → `EventStream` and reaches `Watchdog.process_event`.
+2. **Repeated-Tool Detection:** Verified via `TestWatchdogRealExecutionIntegration.test_repeated_tool_calls_in_real_execution_triggers_alert` that 5 repeated tool executions via the live gateway flow trigger a `repeated_tool_call` alert on the 5th execution.
+3. **Request Isolation:** Verified via `TestWatchdogRealExecutionIntegration.test_request_execution_isolation_in_real_execution` that 3 tool calls for Request A and 3 tool calls for Request B remain isolated without triggering alerts.
+4. **No Code Churn Policy:** The existing Watchdog implementation in `src/watchdog/detector.py` and existing tests in `tests/test_watchdog.py` and `tests/test_eventstream_watchdog_integration.py` fully satisfy all Day 5 requirements. Zero production code changes were required.
+
+**Scope Compliance:**
+- Repeated-tool detection verified: YES
+- Request isolation verified: YES
+- Actual execution events verified: YES
+- Timeout detection added: NO
+- Workflow detection added: NO
+- New anomaly types added: NO
+- Anomaly scoring added: NO
+- Shared event schema redesign: NO
+- Unrelated changes made: NO
+
+**Testing:**
+- `python -m pytest tests/test_watchdog.py -v`: 9/9 passed in 0.08s.
+- `python -m pytest -v`: 38/38 passed in 0.80s (full repository test suite).
+- `python -m compileall src tests`: 0 compilation/import errors.
+
+**Final Status:**
+DAY 5 COMPLETE. Watchdog correctly consumes events from the stabilized execution flow, repeated-tool detection and request isolation are fully verified against real execution events, and all 38 test cases pass cleanly.
