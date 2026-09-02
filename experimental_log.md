@@ -1071,3 +1071,54 @@ Traced the complete execution path through the actual repository code:
 
 **Final Status:**
 Completed. The Provider and Tool subsystem is fully stabilized, verified through the Core V1 Orchestrator, completely conformant with the shared event/state contracts, and all 45 repository tests are green.
+
+---
+
+### Date: 2026-09-02
+**Experiment / Decision:**
+Watchdog Day 6 — EventStream Integration Testing and Detection Boundary Verification
+
+**Context:**
+The Watchdog had previously been integrated with the project's stabilized execution/event flow. Day 6 focused on validating the Watchdog against the real EventStream mechanism rather than relying only on direct or manually constructed event processing.
+
+**Objective:**
+Verify that Watchdog correctly receives and processes execution events through EventStream and add focused test coverage for repeated-tool detection, threshold behavior, and request isolation.
+
+**Testing / Verification:**
+- Verified real `EventStream` → `Watchdog` event delivery by connecting `Watchdog` via `watchdog.attach_to_event_stream(event_stream)` and publishing `TOOL_EXECUTION` events with `ToolResult.to_event_payload()` payloads through `EventStream.publish()`.
+- Verified repeated tool-call detection using execution events delivered through `EventStream`.
+- Verified threshold boundary behavior explicitly:
+  - For default threshold = 5: calls 1 to 4 generated no alert; call 5 triggered a `repeated_tool_call` alert with `count = 5`.
+  - For custom configurable threshold = 3: calls 1 to 2 generated no alert; call 3 triggered a `repeated_tool_call` alert with `count = 3`.
+- Verified request-based isolation: 4 calls for `req-A` and 4 calls for `req-B` published to the same `EventStream` (total 8 events) generated zero alerts; adding a 5th call for `req-A` triggered an alert exclusively for `req-A`, leaving `req-B` independent.
+
+**Implementation / Changes:**
+The existing Watchdog anomaly logic was preserved. Day 6 changes were focused on verification and test coverage rather than introducing new detection functionality. Updated `tests/test_eventstream_watchdog_integration.py` to use `watchdog.attach_to_event_stream()` and explicitly cover event delivery, repeated tool detection, threshold boundary conditions, and request isolation via real `EventStream` events.
+
+**Test Results:**
+- `python -m pytest tests/test_eventstream_watchdog_integration.py tests/test_watchdog.py -v` — 15 passed in 0.12s
+- `python -m pytest -v` — 47 passed in 0.39s
+- `python -m compileall src tests` — Clean compilation (exit code 0)
+
+**Scope:**
+- Real EventStream testing: completed/verified.
+- Repeated-tool detection testing: completed/verified.
+- Threshold behavior testing: completed/verified.
+- Request isolation testing: completed/verified.
+- Focused Watchdog/EventStream tests: updated in `tests/test_eventstream_watchdog_integration.py`.
+- Existing anomaly logic: preserved.
+
+Explicitly confirmed NOT added / NOT modified:
+- Timeout detection: NO
+- Repeating workflow detection: NO
+- Additional anomaly types: NO
+- Anomaly scoring: NO
+- New event infrastructure: NO
+- Gateway changes: NO
+- Provider changes: NO
+- API changes: NO
+- Frontend changes: NO
+- Shared event schema redesign: NO
+
+**Impact:**
+The Watchdog now has comprehensive, focused test coverage validating its behavior against the real EventStream integration, explicitly confirming repeated-tool detection boundary conditions (no alert before threshold, alert at threshold) and request-level isolation without altering production code or other subsystem boundaries.
