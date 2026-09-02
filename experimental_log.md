@@ -979,3 +979,95 @@ Koushik's assigned Day 5 task is to verify that the Watchdog subsystem correctly
 
 **Final Status:**
 DAY 5 COMPLETE. Watchdog correctly consumes events from the stabilized execution flow, repeated-tool detection and request isolation are fully verified against real execution events, and all 38 test cases pass cleanly.
+
+---
+
+### Date: 2026-08-31
+
+**Experiment / Decision:**
+Day 6 Provider and Tool Subsystem Core V1 Stabilization & Verification
+
+**Context:**
+On Day 6, the team focused on Core V1 Stabilization. Dinesh hardened the Gateway → Orchestrator → Provider/Tool execution flow and error handling. Koushik validated the Watchdog and EventStream. Sayan's REST/WebSocket work is paused, Harshit's API-dependent frontend integration is blocked, and Pathway remains deferred. Jyothi's Day 6 assigned responsibility is strictly to verify provider/tool execution through the current Orchestrator, test tool results return path, test provider failures, test tool failures, test invalid/unavailable tools, ensure event contract conformity, and add focused tests without adding any new features.
+
+**Orchestrator Execution Path Inspected:**
+Traced the complete execution path through the actual repository code:
+1. `GatewayRouter.handle_request(request: GatewayRequest)`:
+   - Registers state via `StateManager.create_state(request_id)`.
+   - Publishes `EventLifecycle.REQUEST_RECEIVED`.
+   - Updates state to `"running"` and awaits `Orchestrator.execute_flow(request)`.
+2. `Orchestrator.execute_flow(request)`:
+   - Publishes `EventLifecycle.EXECUTION_STARTED` with `payload={"provider_model": self.provider.config.model_name}`.
+   - Unpacks `request.messages` into `[LLMMessage(**msg)]`.
+   - Fetches JSON schemas from `tool_executor.registry.get_schemas()`.
+   - Awaits `self.provider.generate(messages=llm_messages, tools=tools_schema)`.
+   - Publishes `EventLifecycle.LLM_EXECUTION` with model and usage metadata.
+   - Initializes `final_result = {"content": response.content, "tool_results": []}`.
+   - If `response.has_tool_calls`: iterates over `response.tool_calls`, executing each via `await self.tool_executor.execute_tool_call(tool_call, request_id=request.request_id, session_id=request.session_id)`.
+   - Publishes `EventLifecycle.TOOL_EXECUTION` with `payload=tool_result.to_event_payload(request_id, session_id)`.
+   - Appends `tool_result.to_dict()` into `final_result["tool_results"]`.
+   - Returns `final_result` to `GatewayRouter`.
+3. `GatewayRouter`:
+   - Updates state to `"completed"` and publishes `EventLifecycle.COMPLETED`.
+   - Returns `GatewayResponse(status="success", result=final_result, execution_time_ms=...)`.
+
+**Provider Execution Verification:**
+- Inspected `BaseLLMProvider`, `LLMMessage`, `LLMResponse`, `ProviderConfig`, and `MockProvider`.
+- Verified successful text generation returns normalized `LLMResponse(content="...", tool_calls=[], finish_reason="stop", usage={...})`.
+- Verified provider request/message structure, serialization via `to_dict()`, and usage metadata propagation into the `LLM_EXECUTION` event.
+- Verified that provider exceptions cleanly propagate to the Orchestrator/Gateway layers without being silently swallowed.
+- Finding: Zero production provider changes required.
+
+**Tool Result Verification:**
+- Inspected `BaseTool`, `CalculatorTool`, `EchoTool`, `ToolRegistry`, `ToolExecutor`, and `ToolResult`.
+- Verified complete tool execution path: `Orchestrator` → `Provider` → `ToolCall` → `ToolExecutor.execute_tool_call()` → `BaseTool.execute()` → `ToolResult` → `Orchestrator` → `GatewayRouter`.
+- Verified that `ToolResult`:
+  - Captures `tool_call_id`, `tool_name`, `status` (`"completed"` / `"failed"`), `result`, `error`, and `execution_time_ms`.
+  - Serializes accurately via `to_dict()` and is preserved inside `final_result["tool_results"]`.
+  - Formats event payloads via `to_event_payload(request_id, session_id)` adhering to `EventLifecycle.TOOL_EXECUTION`.
+- Verified multi-tool execution where multiple tool calls in a single `LLMResponse` are executed sequentially, returning all `ToolResult`s to `final_result["tool_results"]`.
+- Finding: Zero production tool changes required.
+
+**Failure Testing & Containment:**
+- **A. Provider Failure:**
+  - Verified that provider-level exceptions (e.g. `ConnectionError`, downstream `503 Service Unavailable`) propagate to `GatewayRouter`, updating `StateManager` state to `"failed"`, emitting `EventLifecycle.FAILED`, and returning `GatewayResponse(status="failed", error="...")`.
+  - No silent success occurs.
+- **B. Tool Failure:**
+  - Verified that runtime tool exceptions (e.g. division by zero in `CalculatorTool`) are safely contained inside `ToolExecutor`, returning `ToolResult(status="failed", error="Tool execution failed: ...")`.
+  - Emitted in `EventLifecycle.TOOL_EXECUTION` event with failure payload and included in `final_result["tool_results"]`.
+- **C. Invalid/Unavailable Tool:**
+  - Unregistered tool lookup returns `ToolResult(status="failed", error="Tool '...' is not registered.")` with zero execution time and failure event payload.
+  - Invalid arguments (missing required parameters or bad parameter names) trigger `TypeError` containment returning `ToolResult(status="failed", error="Invalid tool arguments: ...")`.
+  - Malformed stringified JSON arguments trigger `json.loads` error containment returning `ToolResult(status="failed", error="Invalid arguments JSON: ...")`.
+
+**Event Contract Verification:**
+- Validated strict field conformance of `ToolResult.to_dict()` and `ToolResult.to_event_payload()`.
+- Fields verified in `to_dict()`: `tool_call_id`, `tool_name`, `status`, `result`, `error`, `execution_time_ms`.
+- Fields verified in `to_event_payload()`: `request_id`, `event_type` (`"tool_execution"`), `timestamp`, `tool_name`, `status`, `session_id`, `tool_call_id`, `execution_time_ms`, `error`.
+- 100% aligned with Dinesh's shared event schema (`src/events/schema.py`).
+
+**Focused Tests Added (`tests/test_provider_tools_flow.py`):**
+1. `test_multiple_tool_calls_flow_via_orchestrator`: Multi-tool execution in a single provider response.
+2. `test_tool_execution_stringified_json_arguments`: Tool argument parsing for stringified JSON.
+3. `test_tool_execution_malformed_json_arguments_failure`: Error containment for malformed JSON arguments.
+4. `test_provider_failure_with_gateway_router`: End-to-end Gateway provider exception handling, state transition, and `FAILED` event emission.
+5. `test_tool_result_and_event_contract_field_conformance`: Strict dictionary and event payload schema conformance validation.
+
+**Files Changed:**
+- `tests/test_provider_tools_flow.py` — Added 5 focused integration tests (now 12 comprehensive tests in suite).
+- `experimental_log.md` — Updated with Jyothi's Day 6 verification and findings.
+- `logs/log.md` — Updated shared team log with verified Day 6 progress.
+
+**Tests Performed:**
+- Full test suite: `python -m unittest discover -s tests -v` → 45/45 tests passing (0 failures, 0 errors, 0.389s).
+- Subsystem tests: `python -m unittest tests/test_providers.py tests/test_tools.py tests/test_provider_tools_flow.py -v` → 28/28 tests passing.
+- Entry point smoke test: `python -m src.main` verified via JSON stdin.
+
+**Ownership & Coordination:**
+- Strictly preserved subsystem boundaries (`src/providers/`, `src/tools/`).
+- Zero changes to Dinesh's Gateway/Orchestrator, Koushik's Watchdog, Sayan's API, or Harshit's Frontend.
+- Pathway remains deferred.
+- No new features, routing, caching, or multi-agent architectures added.
+
+**Final Status:**
+Completed. The Provider and Tool subsystem is fully stabilized, verified through the Core V1 Orchestrator, completely conformant with the shared event/state contracts, and all 45 repository tests are green.

@@ -131,145 +131,59 @@ This file records the chronological implementation and development progress of t
   * Verified failure path (`REQUEST_RECEIVED` → `EXECUTION_STARTED` → `FAILED`).
   * *Status*: Adding `LLM_EXECUTION` caused tests in `tests/test_provider_tools_flow.py` (owned by Jyothi) to fail due to hardcoded event sequence assertions. Left unmodified to respect subsystem boundaries.
 
-## Day 6: 2026-08-31 — Gateway/Orchestration Hardening & Verification
+## Day 6: 2026-08-31 — Core V1 Stabilization & Hardening
 
 * **Dinesh (Gateway / Orchestration):**
   * Hardened the GatewayRouter → Orchestrator → Provider/Tool execution pipeline.
-  * Added extensive integration tests in `tests/test_gateway_orchestration.py` to cover:
+  * Added integration tests in `tests/test_gateway_orchestration.py` covering:
     * Successful full request executions.
     * Tool execution failures (e.g., `ValueError` inside a tool).
     * Provider failures (e.g., mocked API downtime).
     * Invalid request format edge cases.
-  * Verified that exception handling in the Orchestrator successfully traps errors, emits a `FAILED` event, updates the StateManager to `failed`, and does not crash the Python process.
+  * Verified that exception handling in the Orchestrator and GatewayRouter successfully traps errors, emits a `FAILED` event, updates the StateManager to `failed`, and does not crash the Python process.
   * Restructured `MockProvider` tests to correctly clear queue state between test runs, fixing test isolation.
   * *Status*: Gateway tests are fully green (4/4 passed). Gateway pipeline hardened without API layer dependencies.
 
 * **Jyothi (LLM / Provider / Tool Execution):**
-  * Maintained provider/tool interfaces. Subsystem verified as highly stable.
+  * Verified provider and tool execution through the stabilized Orchestrator and Gateway pipeline (`src/providers/`, `src/tools/`).
+  * Validated complete tool result path: `Orchestrator` → `Provider` → `ToolCall` → `ToolExecutor` → `BaseTool` → `ToolResult` (`to_dict()`, `to_event_payload()`) → `Orchestrator` → `GatewayRouter`.
+  * Tested and verified provider failure propagation, tool runtime failure containment, unregistered/unavailable tool handling, invalid argument handling (`TypeError`), and stringified/malformed JSON argument parsing.
+  * Validated strict event contract field conformance of `ToolResult.to_dict()` and `ToolResult.to_event_payload()` with `EventLifecycle.TOOL_EXECUTION`.
+  * Added 5 focused integration tests to `tests/test_provider_tools_flow.py` covering multi-tool execution, stringified JSON args, malformed JSON failure, end-to-end Gateway provider failure, and contract field conformance (total 12 tests in suite).
+  * Confirmed 100% contract compatibility; zero production code changes needed.
+  * *Status*: Provider and Tool subsystems fully stabilized and validated (45/45 repository tests passing).
 
 * **Koushik (Watchdog / Anomaly Detection):**
-  * Watchdog verified and operating as expected based on payload subscriptions.
+  * Validated Watchdog (`src/watchdog/detector.py`) and event stream consumption via `EventStream.subscribe()`.
+  * Confirmed repeated tool-call detection and request isolation across live execution events.
+  * *Status*: Subsystem verified and operational (13/13 Watchdog tests passing).
 
 * **Sayan (REST / WebSocket API):**
-  * Temporarily unavailable. Work is blocked/pending for live Python integration with the API boundaries.
+  * Development temporarily paused / unavailable per team assignment. Work remains pending for live Python integration with the API boundaries.
+  * *Status*: Paused / Pending.
 
 * **Harshit (Frontend / Dashboard / Telemetry):**
   * Blocked by API dependency. Awaiting Sayan's live Python pipeline integration to wire real telemetry to the UI panels.
+  * *Status*: Blocked / Pending.
 
 ---
 
 ## Current System State
 
-* **Gateway and Orchestration**: Integrated, Stabilized, Hardened, and Verified natively in Python (Dinesh).
+* **Gateway and Orchestration**: Integrated, Hardened, and Verified natively in Python (Dinesh).
 * **Event Schema and Lifecycle**: Implemented and Validated. Lifecycle strictly follows `REQUEST_RECEIVED` -> `EXECUTION_STARTED` -> `LLM_EXECUTION` -> (`TOOL_EXECUTION`...) -> `COMPLETED`/`FAILED`.
 * **Execution State Management**: Implemented and Validated (`pending` -> `running` -> `completed`/`failed`).
-* **Provider Abstraction & Tool Execution**: Fully Compatible and Integrated natively (Jyothi).
+* **Provider Abstraction & Tool Execution**: Fully Stabilized, Compatible, and Verified (Jyothi, 45/45 tests passing).
+* **Tool Result Return Path**: Verified & Operational across single and multi-tool executions.
 * **EventStream & Watchdog**: Dispatch seam active; Watchdog live execution detection connected and validated (Koushik).
-* **REST/WebSocket API**: State contracts aligned with Python logic, but live Python Gateway integration is still pending (Sayan).
+* **REST/WebSocket API**: State contracts aligned with Python logic, but live Python Gateway integration is paused/pending (Sayan).
 * **Telemetry & Dashboard**: Frontend representation implemented and aligned with `/status` contracts, pending live websocket data (Harshit).
 * **Pathway Event-Stream Integration**: Intentionally Deferred (post-core stabilization).
+* **End-to-end Gateway-Provider-Tool-Watchdog flow**: Hardened, Verified & Operational.
 
 ## Pending / Blocked / Deferred Work
 
-feat/gateway-orchestration-foundation
-* **Sayan**: Needs to replace the simulated Node.js execution engine with a bridge to the live Python Gateway/Orchestrator pipeline.
+* **Sayan**: Needs to replace the simulated Node.js execution engine with a bridge to the live Python Gateway/Orchestrator pipeline once unpaused.
 * **Harshit**: Blocked waiting on the API integration (Sayan) to finalize dashboard WebSocket wiring.
-* **Jyothi**: Needs to update `tests/test_provider_tools_flow.py` to account for the new `LLM_EXECUTION` event added on Day 5, or switch to asserting on event presence rather than hardcoded sequence lengths.
 * **Dinesh**: Pathway integration deferred.
-=======
-* **Dinesh — Gateway / Orchestration:**
-  * Verified Gateway → Orchestrator → Provider/Tool execution flow using existing interfaces.
-  * Verified lifecycle events: `REQUEST_RECEIVED` → `EXECUTION_STARTED` → `TOOL_EXECUTION` → `COMPLETED` / `FAILED`.
-  * Stabilized Gateway/Event/State contracts.
-  * Isolated `tests/test_provider_tools_flow.py` from external subsystem dependencies.
-  * Validated Gateway/Orchestration failure handling and execution output.
-
-* **Jyothi — LLM / Provider Abstraction / Tool Execution:**
-  * Verified provider abstraction (`src/providers/`) and tool execution subsystem (`src/tools/`) against Dinesh's stabilized Gateway → Orchestrator execution flow.
-  * Confirmed 100% contract compatibility; zero production code changes needed.
-  * Validated all 3 required execution scenarios: Success case (text-only prompt), Tool execution case (tool call generation, execution timing, and event formatting), and Failure cases (arithmetic runtime errors, unregistered tools, invalid arguments, and provider exceptions).
-  * Expanded `tests/test_provider_tools_flow.py` with comprehensive integration tests covering all success and failure paths. Full test suite passing (38/38 tests).
-
-* **Koushik — Watchdog / Anomaly Detection:**
-  * Connected Watchdog (`src/watchdog/detector.py`) to live execution events via `attach_to_event_stream()` subscribing to `EventStream`.
-  * Validated real execution integration tests in `tests/test_watchdog.py` verifying live event processing, repeated tool call alert generation, and request isolation.
-
-* **Sayan — REST / WebSocket API:**
-  * Checked `src/gateway/models.py` and `src/events/schema.py` for changes since Day 2 — none found (verified via commit history), so `GatewayRequest`/`GatewayResponse`/`Event` alignment remains accurate.
-  * Found `src/state/manager.py` defines an `ExecutionState` contract (`request_id`, `status: 'pending'|'running'|'completed'|'failed'`, `start_time`, `end_time`, `error`) that `/status/:execution_id` did not match — it was returning internal `EventLifecycle` values instead of the real state vocabulary.
-  * Added `InternalExecutionState` to `types.ts` and a mapping function (`toExecutionStateStatus`) from internal lifecycle events to the real `pending`/`running`/`completed`/`failed` states.
-  * Updated `/execute` and `/status/:execution_id` to track and return `start_time`/`end_time`/`status` consistent with `ExecutionState`.
-  * Verified end-to-end via Postman: `/execute` → `202` mocked response, `/status` correctly transitions `pending` → `completed` with populated timestamps.
-  * No new endpoints or cross-process architecture introduced.
-
-* **Harshit — Frontend / Dashboard / Telemetry:**
-  * Implemented live telemetry execution monitoring in `frontend/dashboard/` (`ExecutionMonitor.tsx`, `WebSocketEventSource.ts`, `liveTypes.ts`, `useLiveExecution.ts`).
-  * Connected live telemetry hook to dashboard layout and configured Vite dev server proxy.
-
-### Date: 2026-08-28 — Day 4 (Harshit): Telemetry Status Contract Alignment
-
-* **Harshit — Frontend / Dashboard / Telemetry:**
-  * Finalized the live execution-status representation: `useLiveExecution.ts` now sources `status`/`end_time`/`error` from Sayan's `GET /status/:execution_id` (`InternalExecutionState`, mirroring `src/state/manager.py`'s `ExecutionState`) instead of re-deriving status on the frontend from the last-seen lifecycle event.
-  * Found and fixed a real contract drift: the previous local derivation treated `REQUEST_RECEIVED` as `"running"`, while the backend/state contract keeps a request `"pending"` until `EXECUTION_STARTED` — confirmed against the live API's actual `pending → running → completed` transitions.
-  * Added `LiveExecutionStatus` + `isLiveExecutionStatus()` to `telemetry/liveTypes.ts`, matching the real `/status/:execution_id` response shape.
-  * Updated `ExecutionMonitor.tsx` to surface the authoritative status, total duration (once terminal), execution error, and status-fetch errors — no visual redesign.
-  * Verified via `tsc --noEmit` (0 errors) and a live smoke test against a running `services/api` instance: `POST /execute` → polled `GET /status/:id` through the full `pending → running → completed` transition with populated `end_time`, and verified the WebSocket `/stream/:id` events remain payload-less as documented.
-  * Not wired into `DashboardLayout.tsx`/existing panels — out of scope for today (see `App.tsx`/`telemetry/README.md`).
-
-### Current Status
-
-* Gateway and orchestration foundation: **Integrated, Stabilized & Validated**
-* Event schema and lifecycle: **Implemented & Validated**
-* Execution state management: **Implemented & Validated**
-* Provider abstraction & Tool execution: **Fully Compatible & Validated (38/38 tests passing)**
-* EventStream → Watchdog dispatch seam: **Integrated & Validated**
-* Watchdog live execution integration: **Connected & Validated**
-* Pathway event-stream integration: **Deferred (Post-Core Stabilization)**
-* REST/WebSocket Gateway integration: **Foundation Operational, State Contract Aligned — Real Integration Pending**
-* Telemetry event representation & live consumption: **Implemented & Validated, Status Contract Aligned with `/status/:execution_id`**
-* Dashboard UI integration: **Live Telemetry Monitor Implemented**
-* End-to-end Gateway-Provider-Tool-Watchdog flow: **Verified & Operational**
-
-### Date: 2026-08-29 / 2026-08-30 — Day 5: V1 Gateway / Orchestration Stabilization & Provider-Tool Integration
-
-* **Dinesh — Gateway / Orchestration:**
-  * Stabilized Gateway → Orchestrator → Provider/Tool execution flow.
-  * Added `LLM_EXECUTION` event to `EventLifecycle` and emitted it from `Orchestrator` to complete lifecycle ordering: `REQUEST_RECEIVED` → `EXECUTION_STARTED` → `LLM_EXECUTION` / `TOOL_EXECUTION` → `COMPLETED`.
-  * Verified failure path (`REQUEST_RECEIVED` → `EXECUTION_STARTED` → `FAILED`).
-  * Updated and verified Dinesh-owned Gateway/Orchestration tests.
-
-* **Jyothi — LLM / Provider Abstraction / Tool Execution:**
-  * Validated existing provider abstraction (`src/providers/`) and tool execution subsystem (`src/tools/`) against Dinesh's stabilized Gateway → Orchestrator flow.
-  * Confirmed 100% contract compatibility; zero production code changes needed.
-  * Verified complete tool execution path and confirmed `ToolResult` is reliably returned to and consumed by the Orchestrator without data loss.
-  * Verified all execution scenarios: Success case (text generation), Tool execution case (math evaluation via `CalculatorTool`), and Failure cases (arithmetic error, unregistered tool, invalid arguments, and provider connection exceptions).
-  * Updated `tests/test_provider_tools_flow.py` test assertions to account for the stabilized `LLM_EXECUTION` lifecycle event. Full test suite passing (38/38 tests).
-
-* **Koushik — Watchdog / Anomaly Detection:**
-  * Verified Watchdog (`src/watchdog/detector.py`) against stabilized execution flow events (`GatewayRouter` → `Orchestrator` → `ToolExecutor` → `ToolResult.to_event_payload()` → `EventStream` → `Watchdog.process_event()`).
-  * Confirmed repeated-tool-call detection works against actual execution events (5 repeated tool calls trigger `repeated_tool_call` alert at threshold 5).
-  * Confirmed request-based isolation (`self.tool_history` keyed by `request_id`).
-  * Kept existing anomaly detection logic intact without introducing new anomaly types or scoring models.
-  * Verified all Watchdog unit and integration tests passing (`tests/test_watchdog.py`, `tests/test_eventstream_watchdog_integration.py`).
-
-* **Sayan — REST / WebSocket API:**
-  * Maintained Node.js + TypeScript REST and WebSocket services under `services/api` with `ExecutionState` contract alignment (`pending`/`running`/`completed`/`failed`).
-
-* **Harshit — Frontend / Dashboard / Telemetry:**
-  * Maintained telemetry and live execution monitoring under `frontend/dashboard/` with authoritative status alignment.
-
-### Current Status
-
-* Gateway and orchestration foundation: **Integrated, Stabilized & Validated**
-* Event schema and lifecycle: **Implemented & Validated (with LLM_EXECUTION)**
-* Execution state management: **Implemented & Validated**
-* Provider abstraction & Tool execution: **Integrated, Fully Compatible & Validated (38/38 tests passing)**
-* Tool Result → Orchestrator return: **Verified & Operational**
-* EventStream → Watchdog dispatch seam: **Integrated & Validated**
-* Watchdog live execution integration: **Connected, Fully Verified & Operational (38/38 tests passing)**
-* Pathway event-stream integration: **Deferred (Post-Core Stabilization)**
-* REST/WebSocket Gateway integration: **Foundation Operational, State Contract Aligned — Real Integration Pending**
-* Telemetry event representation & live consumption: **Implemented & Validated**
-* Dashboard UI integration: **Live Telemetry Monitor Implemented**
-* End-to-end Gateway-Provider-Tool-Watchdog flow: **Verified & Operational**
 

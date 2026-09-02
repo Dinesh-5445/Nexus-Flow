@@ -14,6 +14,10 @@ from src.events.schema import EventLifecycle
 from src.events.stream import EventStream
 from src.orchestration.executor import Orchestrator
 from src.gateway.models import GatewayRequest
+from src.gateway.router import GatewayRouter
+from src.state.manager import StateManager
+from src.tools.base import ToolResult
+
 
 
 class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
@@ -277,6 +281,213 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
         events = event_stream.published_events
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].event_type, EventLifecycle.EXECUTION_STARTED)
+
+    async def test_multiple_tool_calls_flow_via_orchestrator(self):
+        """D1. MULTIPLE TOOLS: Orchestrator executes multiple tool calls from a single LLMResponse in order."""
+        registry = ToolRegistry()
+        registry.register(CalculatorTool())
+        registry.register(EchoTool())
+        executor = ToolExecutor(registry)
+
+        provider = MockProvider(
+            predefined_responses=[
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call_multi_1", name="calculator", arguments={"expression": "100 + 200"}),
+                        ToolCall(id="call_multi_2", name="echo", arguments={"message": "multi tool success"})
+                    ],
+                    finish_reason="tool_calls"
+                )
+            ]
+        )
+        event_stream = EventStream()
+        orchestrator = Orchestrator(provider=provider, tool_executor=executor, event_stream=event_stream)
+
+        request = GatewayRequest(
+            request_id="req-multi-001",
+            session_id="sess-multi-001",
+            messages=[{"role": "user", "content": "Calculate and echo"}]
+        )
+
+        result = await orchestrator.execute_flow(request)
+
+        # Verify both tool results are returned in order
+        self.assertEqual(len(result["tool_results"]), 2)
+        res1 = result["tool_results"][0]
+        res2 = result["tool_results"][1]
+
+        self.assertEqual(res1["tool_call_id"], "call_multi_1")
+        self.assertEqual(res1["tool_name"], "calculator")
+        self.assertEqual(res1["status"], "completed")
+        self.assertEqual(res1["result"], {"expression": "100 + 200", "result": 300})
+
+        self.assertEqual(res2["tool_call_id"], "call_multi_2")
+        self.assertEqual(res2["tool_name"], "echo")
+        self.assertEqual(res2["status"], "completed")
+        self.assertEqual(res2["result"], {"echo": "multi tool success"})
+
+        # Verify events: EXECUTION_STARTED -> LLM_EXECUTION -> TOOL_EXECUTION (1) -> TOOL_EXECUTION (2)
+        events = event_stream.published_events
+        self.assertEqual(len(events), 4)
+        self.assertEqual(events[0].event_type, EventLifecycle.EXECUTION_STARTED)
+        self.assertEqual(events[1].event_type, EventLifecycle.LLM_EXECUTION)
+        self.assertEqual(events[2].event_type, EventLifecycle.TOOL_EXECUTION)
+        self.assertEqual(events[2].payload["tool_call_id"], "call_multi_1")
+        self.assertEqual(events[3].event_type, EventLifecycle.TOOL_EXECUTION)
+        self.assertEqual(events[3].payload["tool_call_id"], "call_multi_2")
+
+    async def test_tool_execution_stringified_json_arguments(self):
+        """D2. ARGUMENT PARSING: ToolExecutor parses stringified JSON arguments passed by provider."""
+        registry = ToolRegistry()
+        registry.register(CalculatorTool())
+        executor = ToolExecutor(registry)
+
+        provider = MockProvider(
+            predefined_responses=[
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call_str_1", name="calculator", arguments='{"expression": "50 * 2"}')
+                    ],
+                    finish_reason="tool_calls"
+                )
+            ]
+        )
+        event_stream = EventStream()
+        orchestrator = Orchestrator(provider=provider, tool_executor=executor, event_stream=event_stream)
+
+        request = GatewayRequest(
+            request_id="req-str-001",
+            session_id="sess-str-001",
+            messages=[{"role": "user", "content": "Multiply 50 * 2"}]
+        )
+
+        result = await orchestrator.execute_flow(request)
+
+        self.assertEqual(len(result["tool_results"]), 1)
+        tool_res = result["tool_results"][0]
+        self.assertEqual(tool_res["status"], "completed")
+        self.assertEqual(tool_res["result"], {"expression": "50 * 2", "result": 100})
+
+    async def test_tool_execution_malformed_json_arguments_failure(self):
+        """D3. ARGUMENT FAILURE: Malformed JSON string arguments safely return failed ToolResult."""
+        registry = ToolRegistry()
+        registry.register(CalculatorTool())
+        executor = ToolExecutor(registry)
+
+        provider = MockProvider(
+            predefined_responses=[
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCall(id="call_bad_json_1", name="calculator", arguments='{bad_json_str')
+                    ],
+                    finish_reason="tool_calls"
+                )
+            ]
+        )
+        event_stream = EventStream()
+        orchestrator = Orchestrator(provider=provider, tool_executor=executor, event_stream=event_stream)
+
+        request = GatewayRequest(
+            request_id="req-bad-json-001",
+            session_id="sess-bad-json-001",
+            messages=[{"role": "user", "content": "Test malformed JSON"}]
+        )
+
+        result = await orchestrator.execute_flow(request)
+
+        self.assertEqual(len(result["tool_results"]), 1)
+        tool_res = result["tool_results"][0]
+        self.assertEqual(tool_res["status"], "failed")
+        self.assertIn("Invalid arguments JSON", tool_res["error"])
+
+        # Verify event stream reflects failure
+        events = event_stream.published_events
+        self.assertEqual(len(events), 3)
+        self.assertEqual(events[2].event_type, EventLifecycle.TOOL_EXECUTION)
+        self.assertEqual(events[2].payload["status"], "failed")
+        self.assertIn("Invalid arguments JSON", events[2].payload["error"])
+
+    async def test_provider_failure_with_gateway_router(self):
+        """D4. PROVIDER FAILURE END-TO-END: Provider exception caught by GatewayRouter, sets failed state and emits FAILED event."""
+        class DowntimeProvider(BaseLLMProvider):
+            async def generate(self, messages, tools=None, **kwargs):
+                raise RuntimeError("503 Service Unavailable: Provider downstream error")
+
+        registry = ToolRegistry()
+        executor = ToolExecutor(registry)
+        provider = DowntimeProvider(config=ProviderConfig(model_name="unstable-model"))
+        event_stream = EventStream()
+        state_manager = StateManager()
+        orchestrator = Orchestrator(provider=provider, tool_executor=executor, event_stream=event_stream)
+        gateway = GatewayRouter(orchestrator=orchestrator, state_manager=state_manager, event_stream=event_stream)
+
+        request = GatewayRequest(
+            request_id="req-gw-fail-001",
+            session_id="sess-gw-fail-001",
+            messages=[{"role": "user", "content": "Hello"}]
+        )
+
+        response = await gateway.handle_request(request)
+
+        # Verify Gateway response status
+        self.assertEqual(response.status, "failed")
+        self.assertEqual(response.request_id, "req-gw-fail-001")
+        self.assertIn("503 Service Unavailable", response.error)
+
+        # Verify StateManager state
+        state = state_manager.get_state("req-gw-fail-001")
+        self.assertIsNotNone(state)
+        self.assertEqual(state.status, "failed")
+        self.assertIn("503 Service Unavailable", state.error)
+
+        # Verify emitted events: REQUEST_RECEIVED -> EXECUTION_STARTED -> FAILED
+        events = event_stream.published_events
+        self.assertEqual(len(events), 3)
+        self.assertEqual(events[0].event_type, EventLifecycle.REQUEST_RECEIVED)
+        self.assertEqual(events[1].event_type, EventLifecycle.EXECUTION_STARTED)
+        self.assertEqual(events[2].event_type, EventLifecycle.FAILED)
+        self.assertIn("503 Service Unavailable", events[2].payload["error"])
+
+    def test_tool_result_and_event_contract_field_conformance(self):
+        """D5. CONTRACT CONFORMANCE: Verifies strict conformance of ToolResult.to_dict() and to_event_payload()."""
+        tool_result = ToolResult(
+            tool_call_id="call_strict_001",
+            tool_name="calculator",
+            status="completed",
+            result={"expression": "1 + 1", "result": 2},
+            error=None,
+            execution_time_ms=5.42
+        )
+
+        # 1. Test to_dict structure
+        d = tool_result.to_dict()
+        self.assertEqual(set(d.keys()), {"tool_call_id", "tool_name", "status", "result", "error", "execution_time_ms"})
+        self.assertEqual(d["tool_call_id"], "call_strict_001")
+        self.assertEqual(d["tool_name"], "calculator")
+        self.assertEqual(d["status"], "completed")
+        self.assertEqual(d["result"], {"expression": "1 + 1", "result": 2})
+        self.assertIsNone(d["error"])
+        self.assertEqual(d["execution_time_ms"], 5.42)
+
+        # 2. Test to_event_payload structure
+        payload = tool_result.to_event_payload(request_id="req-strict-001", session_id="sess-strict-001")
+        expected_keys = {
+            "request_id", "event_type", "timestamp", "tool_name",
+            "status", "session_id", "tool_call_id", "execution_time_ms", "error"
+        }
+        self.assertEqual(set(payload.keys()), expected_keys)
+        self.assertEqual(payload["request_id"], "req-strict-001")
+        self.assertEqual(payload["event_type"], EventLifecycle.TOOL_EXECUTION.value)
+        self.assertEqual(payload["session_id"], "sess-strict-001")
+        self.assertEqual(payload["tool_name"], "calculator")
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["tool_call_id"], "call_strict_001")
+        self.assertEqual(payload["execution_time_ms"], 5.42)
+        self.assertIsNone(payload["error"])
+        self.assertIsInstance(payload["timestamp"], float)
 
 
 if __name__ == "__main__":
