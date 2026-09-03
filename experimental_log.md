@@ -857,3 +857,127 @@ Added `LLM_EXECUTION` to `EventLifecycle` in `src/events/schema.py`. Updated `Or
 * The execution lifecycle is now complete: `REQUEST_RECEIVED` → `EXECUTION_STARTED` → `LLM_EXECUTION` / `TOOL_EXECUTION` → `COMPLETED`.
 * Dinesh-owned tests in `tests/test_gateway_orchestration.py` pass with the new event.
 * Tests in `tests/test_provider_tools_flow.py` (owned by Jyothi) fail because they assert an exact number of events (e.g., `len(events) == 1` or `2`). Per strict ownership boundaries, Jyothi's tests were intentionally not modified to fix these assertions.
+---
+
+### Date: 2026-09-03
+
+**Experiment / Decision:**
+Gateway Execution Failure Hardening and Request Isolation
+
+**Context:**
+
+Following Day 6 core V1 stabilization, the Gateway → Orchestrator → Provider/Tool execution path was functionally working. Day 7 focused on making the existing execution pipeline reliable enough to serve as the stable foundation for the later REST/WebSocket integration.
+
+The objective was not to redesign the architecture or introduce new infrastructure. The focus was controlled failure handling, lifecycle consistency, execution isolation, and final validation of the existing execution contract.
+
+**Files Inspected:**
+
+* `src/gateway/router.py`
+* `src/gateway/models.py`
+* `src/orchestration/executor.py`
+* `src/state/manager.py`
+* `src/events/schema.py`
+* `src/events/stream.py`
+* `tests/test_gateway_orchestration.py`
+
+**Implementation Decisions:**
+
+1. **Request ID validation**
+
+   `GatewayRouter` now validates the presence of `request_id` before beginning execution.
+
+   **Reason:**
+
+   Execution state and event correlation depend on the request/execution identifier. Allowing an empty identifier could create anonymous or incorrectly correlated state.
+
+2. **Controlled Gateway failure handling**
+
+   The Gateway execution block was hardened so unexpected exceptions do not leave an execution in an intermediate state.
+
+   Failure handling covers unexpected failures around:
+   * execution
+   * event publication
+   * state creation/update
+
+   The intended behavior is to transition the execution toward `FAILED` rather than leaving it indefinitely pending/running.
+
+3. **Failure-path protection**
+
+   State updates and FAILED event emission are themselves guarded against unexpected infrastructure errors.
+
+   **Reason:**
+
+   Failure handling should not produce a second unhandled exception that hides the original execution failure or leaves the execution lifecycle ambiguous.
+
+4. **Execution isolation**
+
+   Added concurrent execution testing using `asyncio.gather()` with separate request IDs.
+
+   Example:
+
+   `execution-A → success`
+   
+   `execution-B → failure`
+
+   Verified that state, events, results, and failures remain associated with their respective request IDs.
+
+5. **Lifecycle validation**
+
+   The existing lifecycle was validated rather than replaced.
+
+   Successful execution:
+
+   `REQUEST_RECEIVED`
+   `→ EXECUTION_STARTED`
+   `→ LLM_EXECUTION`
+   `→ TOOL_EXECUTION`
+   `→ COMPLETED`
+
+   Failure execution:
+
+   `REQUEST_RECEIVED`
+   `→ EXECUTION_STARTED`
+   `→ failure`
+   `→ FAILED`
+
+**Architectural Constraint:**
+
+No new state store, event system, queue, framework, provider, tool, API layer, or Pathway component was introduced.
+
+The Gateway continues to delegate execution to the existing Orchestrator and consumes the existing Provider/Tool interfaces.
+
+**Testing:**
+
+Focused Gateway/Orchestration tests were executed:
+
+`pytest tests/test_gateway_orchestration.py`
+
+Result:
+
+`6/6 tests passed`
+
+The full test suite was also executed. A remaining failure was identified in `tests/test_provider_tools_flow.py`, where exact event-count assertions reflect an older lifecycle assumption.
+
+The test expects a smaller event sequence, while the current Orchestrator correctly emits:
+
+`EXECUTION_STARTED`
+`LLM_EXECUTION`
+`TOOL_EXECUTION`
+
+The teammate-owned test was intentionally left unchanged to preserve subsystem ownership.
+
+**Decision:**
+
+Treat the Gateway/Orchestration execution contract as stable for the next integration phase.
+
+Sayan can consume `GatewayRouter.handle_request()` for REST/WebSocket integration without requiring changes to the core orchestration architecture.
+
+**Deferred Scope:**
+
+* REST/WebSocket integration
+* Frontend telemetry integration
+* Pathway integration
+* New anomaly types
+* New provider/tool functionality
+
+These remain outside the Day 7 Gateway/Orchestration scope.

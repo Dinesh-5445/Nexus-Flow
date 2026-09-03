@@ -204,5 +204,48 @@ class TestGatewayOrchestrationFlow(unittest.IsolatedAsyncioTestCase):
         tool_event = next(e for e in events if e.event_type == EventLifecycle.TOOL_EXECUTION)
         self.assertEqual(tool_event.payload["status"], "failed")
 
+    async def test_invalid_request_missing_id(self):
+        request = GatewayRequest(
+            request_id="",
+            messages=[{"role": "user", "content": "Hello"}]
+        )
+        response = await self.gateway.handle_request(request)
+        self.assertEqual(response.status, "failed")
+        self.assertIn("missing request_id", response.error.lower())
+        self.assertEqual(response.request_id, "unknown")
+
+    async def test_execution_isolation(self):
+        self.mock_provider.predefined_responses.clear()
+        self.mock_provider.predefined_responses.extend([
+            LLMResponse(content="Success 1", tool_calls=[]),
+            LLMResponse(content="Success 2", tool_calls=[])
+        ])
+
+        request1 = GatewayRequest(request_id="req-iso-1", messages=[{"role": "user", "content": "Req 1"}])
+        request2 = GatewayRequest(request_id="req-iso-2", messages=[{"role": "user", "content": "Req 2"}])
+
+        # Execute concurrently
+        response1, response2 = await asyncio.gather(
+            self.gateway.handle_request(request1),
+            self.gateway.handle_request(request2)
+        )
+
+        self.assertEqual(response1.status, "success")
+        self.assertEqual(response2.status, "success")
+        self.assertEqual(response1.request_id, "req-iso-1")
+        self.assertEqual(response2.request_id, "req-iso-2")
+        self.assertEqual(response1.result["content"], "Success 1")
+        self.assertEqual(response2.result["content"], "Success 2")
+
+        state1 = self.state_manager.get_state("req-iso-1")
+        state2 = self.state_manager.get_state("req-iso-2")
+        self.assertEqual(state1.status, "completed")
+        self.assertEqual(state2.status, "completed")
+
+        events1 = [e for e in self.event_stream.published_events if e.request_id == "req-iso-1"]
+        events2 = [e for e in self.event_stream.published_events if e.request_id == "req-iso-2"]
+        self.assertEqual(len(events1), 4) # REQ_REC, EXEC_START, LLM_EXEC, COMPLETED
+        self.assertEqual(len(events2), 4)
+
 if __name__ == "__main__":
     unittest.main()
