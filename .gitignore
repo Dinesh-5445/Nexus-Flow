@@ -23,3 +23,6 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local Notes (Never Commit)
+experimental_log.md
