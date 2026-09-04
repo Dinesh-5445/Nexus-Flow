@@ -489,6 +489,106 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(payload["error"])
         self.assertIsInstance(payload["timestamp"], float)
 
+    async def test_provider_tool_execution_isolation_across_requests(self):
+        """E1. DAY 7 ISOLATION: Validates complete tool execution isolation across multiple distinct request/session IDs."""
+        registry = ToolRegistry()
+        registry.register(CalculatorTool())
+        registry.register(EchoTool())
+        executor = ToolExecutor(registry)
+
+        # Configure mock provider with queued responses for two distinct requests
+        provider = MockProvider(
+            predefined_responses=[
+                LLMResponse(
+                    content="Computing calculation for A",
+                    tool_calls=[
+                        ToolCall(id="call_day7_A", name="calculator", arguments={"expression": "10 * 5"})
+                    ],
+                    finish_reason="tool_calls"
+                ),
+                LLMResponse(
+                    content="Computing echo for B",
+                    tool_calls=[
+                        ToolCall(id="call_day7_B", name="echo", arguments={"message": "Isolation test B"})
+                    ],
+                    finish_reason="tool_calls"
+                )
+            ]
+        )
+        event_stream = EventStream()
+        state_manager = StateManager()
+        orchestrator = Orchestrator(provider=provider, tool_executor=executor, event_stream=event_stream)
+        gateway = GatewayRouter(orchestrator=orchestrator, state_manager=state_manager, event_stream=event_stream)
+
+        # Execution A
+        req_a = GatewayRequest(
+            request_id="req-day7-A",
+            session_id="session-A",
+            messages=[{"role": "user", "content": "Multiply 10 * 5"}]
+        )
+        # Execution B
+        req_b = GatewayRequest(
+            request_id="req-day7-B",
+            session_id="session-B",
+            messages=[{"role": "user", "content": "Echo Isolation test B"}]
+        )
+
+        resp_a = await gateway.handle_request(req_a)
+        resp_b = await gateway.handle_request(req_b)
+
+        # Verify Response A isolation
+        self.assertEqual(resp_a.status, "success")
+        self.assertEqual(resp_a.request_id, "req-day7-A")
+        self.assertEqual(len(resp_a.result["tool_results"]), 1)
+        res_a = resp_a.result["tool_results"][0]
+        self.assertEqual(res_a["tool_call_id"], "call_day7_A")
+        self.assertEqual(res_a["tool_name"], "calculator")
+        self.assertEqual(res_a["status"], "completed")
+        self.assertEqual(res_a["result"], {"expression": "10 * 5", "result": 50})
+
+        # Verify Response B isolation
+        self.assertEqual(resp_b.status, "success")
+        self.assertEqual(resp_b.request_id, "req-day7-B")
+        self.assertEqual(len(resp_b.result["tool_results"]), 1)
+        res_b = resp_b.result["tool_results"][0]
+        self.assertEqual(res_b["tool_call_id"], "call_day7_B")
+        self.assertEqual(res_b["tool_name"], "echo")
+        self.assertEqual(res_b["status"], "completed")
+        self.assertEqual(res_b["result"], {"echo": "Isolation test B"})
+
+        # Verify StateManager isolation
+        state_a = state_manager.get_state("req-day7-A")
+        state_b = state_manager.get_state("req-day7-B")
+        self.assertIsNotNone(state_a)
+        self.assertIsNotNone(state_b)
+        self.assertEqual(state_a.status, "completed")
+        self.assertEqual(state_b.status, "completed")
+
+        # Verify EventStream isolation & canonical TOOL_EXECUTION events
+        events_a = [e for e in event_stream.published_events if e.request_id == "req-day7-A"]
+        events_b = [e for e in event_stream.published_events if e.request_id == "req-day7-B"]
+
+        self.assertEqual(len(events_a), 5)  # REQ_REC, EXEC_START, LLM_EXEC, TOOL_EXEC, COMPLETED
+        self.assertEqual(len(events_b), 5)
+
+        tool_event_a = next(e for e in events_a if e.event_type == EventLifecycle.TOOL_EXECUTION)
+        self.assertEqual(tool_event_a.request_id, "req-day7-A")
+        self.assertEqual(tool_event_a.payload["request_id"], "req-day7-A")
+        self.assertEqual(tool_event_a.payload["session_id"], "session-A")
+        self.assertEqual(tool_event_a.payload["tool_call_id"], "call_day7_A")
+        self.assertEqual(tool_event_a.payload["tool_name"], "calculator")
+        self.assertEqual(tool_event_a.payload["status"], "completed")
+        self.assertIsNone(tool_event_a.payload["error"])
+
+        tool_event_b = next(e for e in events_b if e.event_type == EventLifecycle.TOOL_EXECUTION)
+        self.assertEqual(tool_event_b.request_id, "req-day7-B")
+        self.assertEqual(tool_event_b.payload["request_id"], "req-day7-B")
+        self.assertEqual(tool_event_b.payload["session_id"], "session-B")
+        self.assertEqual(tool_event_b.payload["tool_call_id"], "call_day7_B")
+        self.assertEqual(tool_event_b.payload["tool_name"], "echo")
+        self.assertEqual(tool_event_b.payload["status"], "completed")
+        self.assertIsNone(tool_event_b.payload["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
