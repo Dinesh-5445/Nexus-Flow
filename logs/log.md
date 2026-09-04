@@ -213,6 +213,16 @@ This file records the chronological implementation and development progress of t
   * Added focused isolation test `test_provider_tool_execution_isolation_across_requests` to `tests/test_provider_tools_flow.py` (13/13 tests passing, 50/50 repository tests passing).
   * Confirmed 100% compatibility; zero production code changes needed.
 
+* **Koushik (Watchdog / Anomaly Detection):**
+  * Completed Day 7 validation of Watchdog against the finalized AI execution pipeline events (`EventLifecycle.TOOL_EXECUTION`).
+  * Confirmed real `EventStream` → `Watchdog` processing path via `attach_to_event_stream()` subscription.
+  * Verified repeated-tool detection and exact threshold boundary behavior ($N-1$ calls produce no alert, $N$ calls produce `repeated_tool_call` alert).
+  * Verified request and execution history isolation using canonical `request_id`.
+  * Checked normal execution flows for false positives (multi-tool sequences within a request, interleaved lifecycle events, failed tool calls below threshold).
+  * Added 3 focused false-positive integration tests to `tests/test_eventstream_watchdog_integration.py`.
+  * *Important Result*: 53/53 repository integration and unit tests passing. Confirmed 0 false positives during normal pipeline executions.
+  * *Scope*: Preserved existing anomaly logic; introduced no new anomaly types. Strict boundary compliance with zero changes to Gateway, Provider, API, or Frontend code.
+
 ### Day 7 Status
 
 * Gateway → Orchestrator execution: **Hardened & Validated**
@@ -223,8 +233,11 @@ This file records the chronological implementation and development progress of t
 * Request ID validation: **Implemented & Tested**
 * Provider / Tool execution & failure paths: **Fully Validated & Isolated**
 * Canonical event conformance: **Verified**
+* Watchdog & Anomaly Detection: **Validated & Operational (0 False Positives)**
 * Gateway/Orchestration tests: **6/6 Passing**
-* Provider/Tools tests: **13/13 Passing (50/50 Repository Tests Passing)**
+* Provider/Tools tests: **13/13 Passing**
+* Watchdog/EventStream tests: **13/13 Passing (53/53 Repository Tests Passing)**
 * REST/WebSocket integration: **Pending**
 * Frontend/Telemetry integration: **Pending**
 * Pathway integration: **Deferred**
+
