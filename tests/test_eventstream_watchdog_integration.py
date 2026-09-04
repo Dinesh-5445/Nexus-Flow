@@ -296,7 +296,114 @@ class TestEventStreamWatchdogContract(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(received_a[0]["tool_name"], "calculator")
         self.assertEqual(received_b[0]["tool_name"], "calculator")
 
+    async def test_false_positive_normal_sequence_different_tools(self):
+        """False Positive Check: Multiple different tools executed in sequence do not trigger alert if each is below threshold."""
+        calc_result = ToolResult(
+            tool_call_id="call_calc",
+            tool_name="calculator",
+            status="completed",
+            result={"result": 15},
+            execution_time_ms=1.2,
+        )
+        echo_result = ToolResult(
+            tool_call_id="call_echo",
+            tool_name="echo",
+            status="completed",
+            result={"echo": "hello"},
+            execution_time_ms=0.8,
+        )
+
+        request_id = "req-multi-tools"
+
+        # Execute calculator 3 times and echo 2 times (total 5 tool calls across request)
+        for i in range(3):
+            payload = calc_result.to_event_payload(request_id=request_id, session_id="sess-multi")
+            await self.event_stream.publish(
+                Event(
+                    event_type=EventLifecycle.TOOL_EXECUTION,
+                    request_id=request_id,
+                    payload=payload,
+                )
+            )
+        for i in range(2):
+            payload = echo_result.to_event_payload(request_id=request_id, session_id="sess-multi")
+            await self.event_stream.publish(
+                Event(
+                    event_type=EventLifecycle.TOOL_EXECUTION,
+                    request_id=request_id,
+                    payload=payload,
+                )
+            )
+
+        # Total tool events in history = 5, but calculator count is 3 and echo count is 2 (threshold = 5)
+        self.assertEqual(len(self.watchdog.tool_history[request_id]), 5)
+        self.assertEqual(len(self.watchdog.alerts), 0, "No false positive alert when total calls reach 5 across different tools")
+
+    async def test_false_positive_interleaved_lifecycle_events(self):
+        """False Positive Check: Interleaved pipeline lifecycle events do not interfere or cause false alerts."""
+        req_id = "req-pipeline-flow"
+
+        # 1. REQUEST_RECEIVED
+        await self.event_stream.publish(
+            Event(event_type=EventLifecycle.REQUEST_RECEIVED, request_id=req_id, payload={"prompt": "test"})
+        )
+        # 2. EXECUTION_STARTED
+        await self.event_stream.publish(
+            Event(event_type=EventLifecycle.EXECUTION_STARTED, request_id=req_id, payload={"provider": "mock"})
+        )
+        # 3. LLM_EXECUTION
+        await self.event_stream.publish(
+            Event(event_type=EventLifecycle.LLM_EXECUTION, request_id=req_id, payload={"tokens": 120})
+        )
+        # 4. TOOL_EXECUTION (calculator #1)
+        tool_payload_1 = ToolResult(tool_call_id="c1", tool_name="calculator", status="completed").to_event_payload(req_id)
+        await self.event_stream.publish(
+            Event(event_type=EventLifecycle.TOOL_EXECUTION, request_id=req_id, payload=tool_payload_1)
+        )
+        # 5. LLM_EXECUTION
+        await self.event_stream.publish(
+            Event(event_type=EventLifecycle.LLM_EXECUTION, request_id=req_id, payload={"tokens": 80})
+        )
+        # 6. TOOL_EXECUTION (echo #1)
+        tool_payload_2 = ToolResult(tool_call_id="c2", tool_name="echo", status="completed").to_event_payload(req_id)
+        await self.event_stream.publish(
+            Event(event_type=EventLifecycle.TOOL_EXECUTION, request_id=req_id, payload=tool_payload_2)
+        )
+        # 7. COMPLETED
+        await self.event_stream.publish(
+            Event(event_type=EventLifecycle.COMPLETED, request_id=req_id, payload={"status": "success"})
+        )
+
+        self.assertEqual(len(self.event_stream.published_events), 7)
+        self.assertEqual(self.watchdog.tool_history[req_id], ["calculator", "echo"])
+        self.assertEqual(len(self.watchdog.alerts), 0)
+
+    async def test_false_positive_failed_tool_executions_below_threshold(self):
+        """False Positive Check: Failed tool executions below threshold do not trigger false alerts."""
+        req_id = "req-failed-tools"
+        failed_result = ToolResult(
+            tool_call_id="call_fail",
+            tool_name="calculator",
+            status="failed",
+            error="Division by zero",
+            execution_time_ms=0.5,
+        )
+
+        for _ in range(2):
+            payload = failed_result.to_event_payload(request_id=req_id, session_id="sess-fail")
+            await self.event_stream.publish(
+                Event(
+                    event_type=EventLifecycle.TOOL_EXECUTION,
+                    request_id=req_id,
+                    payload=payload,
+                )
+            )
+
+        self.assertEqual(len(self.watchdog.tool_history[req_id]), 2)
+        self.assertEqual(len(self.watchdog.alerts), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
