@@ -589,6 +589,148 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_event_b.payload["status"], "completed")
         self.assertIsNone(tool_event_b.payload["error"])
 
+    async def test_day8_final_v1_request_session_isolation_and_result_propagation(self):
+        """F1. DAY 8 FINAL V1 VALIDATION: Comprehensive isolation, multi-tool result propagation, and error containment."""
+        registry = ToolRegistry()
+        registry.register(CalculatorTool())
+        registry.register(EchoTool())
+        executor = ToolExecutor(registry)
+
+        # Provider programmed with distinct responses for Request A and Request B
+        provider = MockProvider(
+            config=ProviderConfig(model_name="day8-v1-validated-model"),
+            predefined_responses=[
+                LLMResponse(
+                    content="Executing dual tools for Day 8 Request A",
+                    tool_calls=[
+                        ToolCall(id="call_day8_A1", name="calculator", arguments={"expression": "12 * 12"}),
+                        ToolCall(id="call_day8_A2", name="echo", arguments={"message": "Hello Day 8"})
+                    ],
+                    finish_reason="tool_calls",
+                    usage={"prompt_tokens": 25, "completion_tokens": 30, "total_tokens": 55}
+                ),
+                LLMResponse(
+                    content="Executing failing tools for Day 8 Request B",
+                    tool_calls=[
+                        ToolCall(id="call_day8_B1", name="calculator", arguments={"expression": "10 / 0"}),
+                        ToolCall(id="call_day8_B2", name="unregistered_search", arguments={"q": "nexusflow"})
+                    ],
+                    finish_reason="tool_calls",
+                    usage={"prompt_tokens": 20, "completion_tokens": 25, "total_tokens": 45}
+                )
+            ]
+        )
+        event_stream = EventStream()
+        state_manager = StateManager()
+        orchestrator = Orchestrator(provider=provider, tool_executor=executor, event_stream=event_stream)
+        gateway = GatewayRouter(orchestrator=orchestrator, state_manager=state_manager, event_stream=event_stream)
+
+        # 1. Execute Request A
+        req_a = GatewayRequest(
+            request_id="req-day8-A",
+            session_id="session-day8-A",
+            messages=[{"role": "user", "content": "Compute 12*12 and echo hello"}]
+        )
+        resp_a = await gateway.handle_request(req_a)
+
+        # 2. Execute Request B
+        req_b = GatewayRequest(
+            request_id="req-day8-B",
+            session_id="session-day8-B",
+            messages=[{"role": "user", "content": "Run failing calculations and searches"}]
+        )
+        resp_b = await gateway.handle_request(req_b)
+
+        # 3. Verify Response A Integrity & Result Propagation
+        self.assertEqual(resp_a.status, "success")
+        self.assertEqual(resp_a.request_id, "req-day8-A")
+        self.assertEqual(resp_a.result["content"], "Executing dual tools for Day 8 Request A")
+        self.assertEqual(len(resp_a.result["tool_results"]), 2)
+
+        res_a1 = resp_a.result["tool_results"][0]
+        self.assertEqual(res_a1["tool_call_id"], "call_day8_A1")
+        self.assertEqual(res_a1["tool_name"], "calculator")
+        self.assertEqual(res_a1["status"], "completed")
+        self.assertEqual(res_a1["result"], {"expression": "12 * 12", "result": 144})
+        self.assertIsNone(res_a1["error"])
+        self.assertGreaterEqual(res_a1["execution_time_ms"], 0.0)
+
+        res_a2 = resp_a.result["tool_results"][1]
+        self.assertEqual(res_a2["tool_call_id"], "call_day8_A2")
+        self.assertEqual(res_a2["tool_name"], "echo")
+        self.assertEqual(res_a2["status"], "completed")
+        self.assertEqual(res_a2["result"], {"echo": "Hello Day 8"})
+        self.assertIsNone(res_a2["error"])
+
+        # 4. Verify Response B Integrity & Error Containment
+        self.assertEqual(resp_b.status, "success")
+        self.assertEqual(resp_b.request_id, "req-day8-B")
+        self.assertEqual(resp_b.result["content"], "Executing failing tools for Day 8 Request B")
+        self.assertEqual(len(resp_b.result["tool_results"]), 2)
+
+        res_b1 = resp_b.result["tool_results"][0]
+        self.assertEqual(res_b1["tool_call_id"], "call_day8_B1")
+        self.assertEqual(res_b1["tool_name"], "calculator")
+        self.assertEqual(res_b1["status"], "failed")
+        self.assertIn("division by zero", res_b1["error"])
+
+        res_b2 = resp_b.result["tool_results"][1]
+        self.assertEqual(res_b2["tool_call_id"], "call_day8_B2")
+        self.assertEqual(res_b2["tool_name"], "unregistered_search")
+        self.assertEqual(res_b2["status"], "failed")
+        self.assertIn("is not registered", res_b2["error"])
+
+        # 5. Strict Cross-Request Isolation
+        # Ensure no tool results or call IDs leaked across responses
+        a_call_ids = {r["tool_call_id"] for r in resp_a.result["tool_results"]}
+        b_call_ids = {r["tool_call_id"] for r in resp_b.result["tool_results"]}
+        self.assertEqual(a_call_ids, {"call_day8_A1", "call_day8_A2"})
+        self.assertEqual(b_call_ids, {"call_day8_B1", "call_day8_B2"})
+        self.assertTrue(a_call_ids.isdisjoint(b_call_ids))
+
+        # 6. Verify State Isolation
+        state_a = state_manager.get_state("req-day8-A")
+        state_b = state_manager.get_state("req-day8-B")
+        self.assertEqual(state_a.status, "completed")
+        self.assertEqual(state_b.status, "completed")
+
+        # 7. Canonical Event Stream & Payload Validation
+        events_a = [e for e in event_stream.published_events if e.request_id == "req-day8-A"]
+        events_b = [e for e in event_stream.published_events if e.request_id == "req-day8-B"]
+
+        # A: REQUEST_RECEIVED -> EXECUTION_STARTED -> LLM_EXECUTION -> TOOL_EXECUTION (A1) -> TOOL_EXECUTION (A2) -> COMPLETED
+        self.assertEqual(len(events_a), 6)
+        self.assertEqual([e.event_type for e in events_a], [
+            EventLifecycle.REQUEST_RECEIVED,
+            EventLifecycle.EXECUTION_STARTED,
+            EventLifecycle.LLM_EXECUTION,
+            EventLifecycle.TOOL_EXECUTION,
+            EventLifecycle.TOOL_EXECUTION,
+            EventLifecycle.COMPLETED,
+        ])
+        for e in events_a:
+            self.assertEqual(e.request_id, "req-day8-A")
+
+        tool_evts_a = [e for e in events_a if e.event_type == EventLifecycle.TOOL_EXECUTION]
+        self.assertEqual(tool_evts_a[0].payload["tool_call_id"], "call_day8_A1")
+        self.assertEqual(tool_evts_a[0].payload["session_id"], "session-day8-A")
+        self.assertEqual(tool_evts_a[0].payload["status"], "completed")
+        self.assertEqual(tool_evts_a[1].payload["tool_call_id"], "call_day8_A2")
+        self.assertEqual(tool_evts_a[1].payload["session_id"], "session-day8-A")
+        self.assertEqual(tool_evts_a[1].payload["status"], "completed")
+
+        # B: REQUEST_RECEIVED -> EXECUTION_STARTED -> LLM_EXECUTION -> TOOL_EXECUTION (B1) -> TOOL_EXECUTION (B2) -> COMPLETED
+        self.assertEqual(len(events_b), 6)
+        tool_evts_b = [e for e in events_b if e.event_type == EventLifecycle.TOOL_EXECUTION]
+        self.assertEqual(tool_evts_b[0].payload["tool_call_id"], "call_day8_B1")
+        self.assertEqual(tool_evts_b[0].payload["session_id"], "session-day8-B")
+        self.assertEqual(tool_evts_b[0].payload["status"], "failed")
+        self.assertIn("division by zero", tool_evts_b[0].payload["error"])
+        self.assertEqual(tool_evts_b[1].payload["tool_call_id"], "call_day8_B2")
+        self.assertEqual(tool_evts_b[1].payload["session_id"], "session-day8-B")
+        self.assertEqual(tool_evts_b[1].payload["status"], "failed")
+        self.assertIn("is not registered", tool_evts_b[1].payload["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
