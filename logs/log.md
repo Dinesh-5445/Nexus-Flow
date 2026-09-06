@@ -241,7 +241,7 @@ This file records the chronological implementation and development progress of t
 * Frontend/Telemetry integration: **Pending**
 * Pathway integration: **Deferred**
 
-## Day 8: 2026-09-05 — Final V1 Integration & Validation
+## Day 8: 2026-09-06 — Final V1 Integration & Validation
 
 * **Jyothi (LLM / Provider / Tool Execution):**
   * Completed Day 8 final V1 validation for the Provider and Tool execution subsystem.
@@ -254,3 +254,15 @@ This file records the chronological implementation and development progress of t
   * Provider/Tool focused tests: **30/30 passing** (`tests/test_providers.py`, `tests/test_tools.py`, `tests/test_provider_tools_flow.py`).
   * Full repository regression test suite: **95/95 passing**.
   * No production Provider/Tool code changes were required; existing implementation is fully V1-compatible and resume-ready.
+
+* **Koushik (Watchdog / Anomaly Detection):**
+  * Completed final validation of the real `EventStream` → `Watchdog` integration flow (`watchdog.attach_to_event_stream()`).
+  * Verified canonical `TOOL_EXECUTION` event processing dispatched via `EventStream.publish()`.
+  * Validated repeated-tool-call anomaly detection using canonical `ToolResult.to_event_payload()` payloads.
+  * Validated exact threshold boundary behavior: confirmed no alert triggers below threshold ($N-1$ calls), and `repeated_tool_call` alert fires at threshold ($N$ calls).
+  * Validated request/execution isolation: confirmed independent `request_id` histories maintain isolated call counts.
+  * Validated false-positive resistance against normal tool sequences, multi-tool executions within a request, interleaved non-`TOOL_EXECUTION` lifecycle events, and failed tool calls below threshold.
+  * Executed final Watchdog integration tests (`tests/test_watchdog.py`, `tests/test_eventstream_watchdog_integration.py`).
+  * *Results*: 18/18 Watchdog-focused integration and unit tests passing; 95/95 full repository test suite passing.
+  * *Scope*: Preserved existing anomaly logic; introduced 0 new anomaly types. Strict boundary compliance with zero changes to Gateway, Provider, API, or Frontend code.
+
