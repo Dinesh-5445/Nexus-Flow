@@ -3,6 +3,8 @@ import http from "http";
 import { WebSocketServer, WebSocket as WsWebSocket } from "ws";
 import { randomUUID } from "crypto";
 import { GatewayRequest, GatewayResponse, ExecutionEvent, EventLifecycle, InternalExecutionState } from "./types";
+import path from "path";
+import { spawn } from "child_process";
 
 const app = express();
 app.use(express.json());
@@ -15,11 +17,9 @@ app.get("/health", (req: Request, res: Response) => {
     res.json({status: "ok"});
 });
 
-// Client submits a task.  Uses simulateExecution() for now — kept as a
-// minimal mock so the REST/WS layer can be tested independently of the
-// real Gateway/Orchestrator process. Real integration point is
-// forwardToGateway() below, not yet wired in (architecture not agreed).
-app.post("/execute", (req: Request, res: Response) => {
+// Client submits a task. Real integration point is
+// forwardToGateway() below.
+app.post("/execute", async (req: Request, res: Response) => {
   const { request_id, messages, session_id, parameters } = req.body;
 
   if (!request_id || !Array.isArray(messages)) {
@@ -34,19 +34,42 @@ app.post("/execute", (req: Request, res: Response) => {
     start_time: Date.now() / 1000
   });
 
-  // Mocked Gateway Response
-  const mockResponse: GatewayResponse = {
+  res.status(202).json({
     request_id,
     status: "started",
     execution_time_ms: 0,
-  };
-
-  res.status(202).json({
-    ...mockResponse,
     stream_url: `/stream/${request_id}`,
   });
 
-  simulateExecution(request_id);
+  // Local bookkeeping event, fires immediately before the Python
+  // subprocess is even spawned. Python's own REQUEST_RECEIVED event
+  // (via onEvent below) will arrive shortly after — harmless duplicate,
+  // emitEvent's state update is idempotent.
+  emitEvent(request_id, "request_received");
+
+  try {
+    const gatewayRequest: GatewayRequest = {
+      request_id, 
+      messages, 
+      session_id,
+      parameters,
+    }
+
+    // Real intermediate + terminal events (execution_started,
+    // llm_execution, tool_execution, completed/failed) are published
+    // by the Gateway/Orchestrator inside the Python process and
+    // relayed here via onEvent as they happen — forwarded live by
+    // src/main.py's stdout-writer subscriber. Do NOT manually emit completed/failed after this resolves
+    // — Python already publishes those through onEvent.
+    await forwardToGateway(gatewayRequest, (event) => {
+      emitEvent(event.request_id, event.event_type, event.payload);
+    });
+  }
+  catch (err) {
+    emitEvent(request_id, "failed", {
+      error: err instanceof Error ? err.message : "Gateway process error",
+    });
+  }
 });
 
 // Polling fallback for status (alternative to WS stream)
@@ -96,6 +119,7 @@ const toExecutionStateStatus = (eventType: string) => {
       return "pending";
     
     case "execution_started":
+    case "llm_execution":
     case "tool_execution" :
       return "running";
     
@@ -109,7 +133,6 @@ const toExecutionStateStatus = (eventType: string) => {
       return "pending";
   }
 }
-
 
 const emitEvent = (requestId: string, eventType: EventLifecycle, payload?: Record<string, unknown>) => {
   const event: ExecutionEvent = {
@@ -141,29 +164,63 @@ const emitEvent = (requestId: string, eventType: EventLifecycle, payload?: Recor
   }
 }
 
-// Mocked event sequence standing in for real Gateway/Orchestrator events.
-// Matches Dinesh's EventLifecycle enum exactly. Temporary testing
-// mechanism only.
-const simulateExecution = (requestId: string) => {
-  const steps: EventLifecycle[] = [
-    "request_received",
-    "execution_started",
-    "tool_execution",
-    "completed",
-  ];
+// Real Gateway integration point. Spawns one Python subprocess per
+// request (`python -m src.main`), writes the request as JSON to stdin,
+// and reads newline-delimited JSON from stdout. Two object shapes are
+// expected on stdout, one per line:
+//   {"__type__": "Event", event_type, request_id, timestamp, payload}
+//   {"__type__": "GatewayResponse", request_id, status, ...}
+// Events are relayed live via onEvent as each line arrives; the final
+// GatewayResponse resolves the returned promise once the process exits.
+// Requires main.py to stream Event lines as they're published (not yet
+// built as of writing — see logs/log.md) — until then, only the
+// final GatewayResponse line will appear, no intermediate Event lines
+const forwardToGateway = async ( request: GatewayRequest, onEvent: (event: ExecutionEvent) => void): Promise<GatewayResponse> => {
+  return new Promise((resolve, reject) => {
+    const rootDir = path.resolve(__dirname, "../../..");
+    const pyProcess = spawn("python", ["-m", "src.main"], { cwd: rootDir });
 
-  steps.forEach((eventType, i) => {
-    setTimeout(() => emitEvent(requestId, eventType), (i + 1) * 500);
+    pyProcess.stdin.write(JSON.stringify(request) + "\n");
+    pyProcess.stdin.end();
+
+    let buffer = "";
+    let finalResponse: GatewayResponse | null = null;
+
+    pyProcess.stdout.on("data", (data: Buffer) => {
+      // Python may write partial lines across multiple 'data' chunks,
+      // so buffer and only process complete (newline-terminated) lines.
+      buffer += data.toString();
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? ""; // keep incomplete last line for next chunk
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed.__type__ === "GatewayResponse") {
+            finalResponse = parsed;
+          } else if (parsed.__type__ === "Event") {
+            onEvent(parsed as ExecutionEvent);
+          }
+        } catch (e) {
+          console.error("Failed to parse Python stdout line:", trimmed);
+        }
+      }
+    });
+
+    pyProcess.stderr.on("data", (data: Buffer) => {
+      console.error("Python stderr:", data.toString());
+    });
+
+    pyProcess.on("close", () => {
+      if (finalResponse) {
+        resolve(finalResponse);
+      } else {
+        reject(new Error("Gateway process exited without a final response"));
+      }
+    });
   });
-};
-
-// Placeholder for the real Gateway integration point.
-// Transport/protocol (HTTP, gRPC, subprocess+stdio, queue, etc.) is not
-// yet agreed as the official REST/WebSocket -> Gateway architecture —
-// do not assume one here. Currently unused; /execute still uses
-// simulateExecution() for mocked responses.
-async function forwardToGateway(request: GatewayRequest): Promise<GatewayResponse> {
-  throw new Error("Gateway integration not implemented yet");
 }
 
 const PORT = process.env.PORT || 3000;
