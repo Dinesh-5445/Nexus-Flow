@@ -4,6 +4,7 @@
 export type EventLifecycle = 
 | "request_received"
 | "execution_started"
+| "llm_execution"
 | "tool_execution"
 | "completed"
 | "failed";

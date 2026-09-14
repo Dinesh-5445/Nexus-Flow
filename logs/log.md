@@ -266,3 +266,10 @@ This file records the chronological implementation and development progress of t
   * *Results*: 18/18 Watchdog-focused integration and unit tests passing; 95/95 full repository test suite passing.
   * *Scope*: Preserved existing anomaly logic; introduced 0 new anomaly types. Strict boundary compliance with zero changes to Gateway, Provider, API, or Frontend code.
 
+* **[ 2026-09-13 ] Sayan — REST / WebSocket API:**
+  * Returned after an extended break; re-verified contract state from scratch (`src/gateway/models.py` unchanged, `src/events/schema.py`'s `LLM_EXECUTION` addition already reflected).
+  * Confirmed via `src/gateway/router.py` that real lifecycle events are published in-process but never reach `stdout` from `src/main.py`.
+  * Clarified mechanism with Dinesh: `src/main.py` will subscribe a stdout-writer to `EventStream`, streaming one JSON line per event; Gateway core logic stays unmodified.
+  * Rewrote `forwardToGateway()` to parse newline-delimited stdout, relaying `Event` lines live via an `onEvent` callback and resolving on the final `GatewayResponse`.
+  * Rewired `/execute` to use real events end-to-end via `emitEvent`; removed `simulateExecution()`.
+  * API side is complete and ready; blocked on `src/main.py`'s stdout-writer for full end-to-end testing.
