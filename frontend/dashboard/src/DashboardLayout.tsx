@@ -11,9 +11,10 @@ interface DashboardLayoutProps {
   alerts: WatchdogAlert[];
 }
 
-// Foundation only — not wired to real data yet.
-// Will be replaced with live WebSocket/REST data once
-// Sayan's API and the shared event schema are available.
+// Day 8: session/events/metrics are now populated from live REST/WebSocket
+// data by App.tsx (via telemetry/useLiveExecution + telemetry/liveAdapters),
+// not data/placeholderData.ts. `alerts` is still placeholder ([]) — no
+// Watchdog alert endpoint exists on the API boundary yet.
 export default function DashboardLayout({
   session,
   events,

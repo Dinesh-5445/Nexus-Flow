@@ -9,3 +9,4 @@ export * from "./useTelemetryEvents";
 export * from "./liveTypes";
 export * from "./WebSocketEventSource";
 export * from "./useLiveExecution";
+export * from "./liveAdapters";
