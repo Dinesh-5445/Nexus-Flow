@@ -6,7 +6,7 @@
 //
 //   - Event envelope + EventLifecycle : src/events/schema.py        (Dinesh)
 //   - request_received / completed / failed payloads : src/gateway/router.py
-//   - execution_started payload                       : src/orchestration/executor.py
+//   - execution_started / llm_execution payloads      : src/orchestration/executor.py
 //   - tool_execution payload (ToolResult.to_event_payload) : src/tools/base.py
 //   - execution status values ('pending' | 'running' | 'completed' | 'failed')
 //                                                       : src/state/manager.py
@@ -14,11 +14,20 @@
 // SOURCE OF TRUTH: these shapes must track src/events/schema.py and the
 // producers above. If those change, this file is the place to update.
 //
-// TRANSPORT NOTE: no real transport exists yet. Sayan's REST/WebSocket layer
-// (services/api/src/index.ts) is currently stubbed (/execute and /stream/:id
-// have no implementation). This file only defines the *representation*; see
-// mockEvents.ts / MockEventSource.ts for the temporary mocked feed used until
-// a real WebSocket/REST source is available.
+// Day 8 fix: EventLifecycle here was missing LLM_EXECUTION, which
+// src/events/schema.py and src/orchestration/executor.py added back on Day 5
+// (lifecycle is REQUEST_RECEIVED -> EXECUTION_STARTED -> LLM_EXECUTION ->
+// TOOL_EXECUTION* -> COMPLETED/FAILED, per logs/log.md Day 5). Confirmed by
+// inspecting the current executor.py directly. Added below so the frontend
+// event union and status derivation stop silently mismatching the real
+// lifecycle once live events flow (see AlertsPanel/coordination notes for
+// why they don't reach the browser yet).
+//
+// TRANSPORT NOTE: Sayan's REST/WebSocket layer (services/api/src/index.ts)
+// is implemented today (POST /execute, GET /status/:id, WS /stream/:id) —
+// see WebSocketEventSource.ts / useLiveExecution.ts. This file only defines
+// the *representation*; see mockEvents.ts / MockEventSource.ts for the
+// still-useful mocked feed used for UI development without a backend.
 
 /**
  * Mirrors src/events/schema.py::EventLifecycle.
@@ -27,6 +36,7 @@
 export enum EventLifecycle {
   REQUEST_RECEIVED = "request_received",
   EXECUTION_STARTED = "execution_started",
+  LLM_EXECUTION = "llm_execution",
   TOOL_EXECUTION = "tool_execution",
   COMPLETED = "completed",
   FAILED = "failed",
@@ -41,6 +51,17 @@ export interface RequestReceivedPayload {
 /** Payload for EventLifecycle.EXECUTION_STARTED (see orchestration/executor.py). */
 export interface ExecutionStartedPayload {
   provider_model: string;
+}
+
+/**
+ * Payload for EventLifecycle.LLM_EXECUTION, published right after the
+ * provider responds (see orchestration/executor.py: `{"model": ...,
+ * "usage": response.usage}`). `usage` is left untyped since
+ * src/providers/base.py does not pin down a concrete shape for it.
+ */
+export interface LlmExecutionPayload {
+  model: string;
+  usage: unknown;
 }
 
 /**
@@ -88,6 +109,7 @@ export interface FailedPayload {
 export type GatewayEvent =
   | { event_type: EventLifecycle.REQUEST_RECEIVED; request_id: string; timestamp: number; payload: RequestReceivedPayload }
   | { event_type: EventLifecycle.EXECUTION_STARTED; request_id: string; timestamp: number; payload: ExecutionStartedPayload }
+  | { event_type: EventLifecycle.LLM_EXECUTION; request_id: string; timestamp: number; payload: LlmExecutionPayload }
   | { event_type: EventLifecycle.TOOL_EXECUTION; request_id: string; timestamp: number; payload: ToolExecutionPayload }
   | { event_type: EventLifecycle.COMPLETED; request_id: string; timestamp: number; payload: CompletedPayload }
   | { event_type: EventLifecycle.FAILED; request_id: string; timestamp: number; payload: FailedPayload };
@@ -123,6 +145,7 @@ export function statusForEvent(eventType: EventLifecycle): ExecutionStatus {
       return "failed";
     case EventLifecycle.REQUEST_RECEIVED:
     case EventLifecycle.EXECUTION_STARTED:
+    case EventLifecycle.LLM_EXECUTION:
     case EventLifecycle.TOOL_EXECUTION:
       return "running";
     default:

@@ -8,8 +8,11 @@
 // request, shaped exactly like the payloads the backend actually produces
 // today (see types.ts header for the source files). They exist so the
 // event-consumption foundation (EventSource.ts / useTelemetryEvents.ts) has
-// something real to consume and can be exercised/tested before any real
-// transport exists.
+// something to consume for UI development without a running backend.
+//
+// Day 8: sequence updated to include LLM_EXECUTION between
+// EXECUTION_STARTED and TOOL_EXECUTION, matching the corrected lifecycle in
+// types.ts (previously missing here too).
 
 import {
   EventLifecycle,
@@ -36,7 +39,7 @@ export interface MockExecutionOptions {
 /**
  * Builds the full ordered event sequence for one mocked execution, following
  * the same lifecycle GatewayRouter/Orchestrator emit server-side:
- *   REQUEST_RECEIVED -> EXECUTION_STARTED -> TOOL_EXECUTION* -> COMPLETED | FAILED
+ *   REQUEST_RECEIVED -> EXECUTION_STARTED -> LLM_EXECUTION -> TOOL_EXECUTION* -> COMPLETED | FAILED
  */
 export function createMockExecutionEvents(options: MockExecutionOptions = {}): GatewayEvent[] {
   const requestId = options.requestId ?? nextMockId("req");
@@ -68,6 +71,17 @@ export function createMockExecutionEvents(options: MockExecutionOptions = {}): G
     timestamp: t,
     payload: {
       provider_model: providerModel,
+    },
+  });
+
+  t += 0.1;
+  events.push({
+    event_type: EventLifecycle.LLM_EXECUTION,
+    request_id: requestId,
+    timestamp: t,
+    payload: {
+      model: providerModel,
+      usage: null,
     },
   });
 
