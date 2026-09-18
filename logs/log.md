@@ -283,3 +283,28 @@ This file records the chronological implementation and development progress of t
   * Verified end-to-end against a running `services/api` instance: `tsc --noEmit` and `vite build` both clean; manual REST + WebSocket calls (`POST /execute`, `GET /status/:id`, `WS /stream/:id`) with the dashboard's exact request shape confirmed the frontend-side wiring is correct.
   * **Blocking finding (confirmed by direct reproduction, not just inspection):** `src/main.py` only ever prints a single final `GatewayResponse` line — running `python3 -m src.main` directly, and separately exercising the running API plus a raw WebSocket client, both showed only the Node-side `request_received` bookkeeping event ever reaching `/stream/:id`, with `GET /status/:id` stuck at `"pending"` indefinitely. This matches Sayan's Day 8 note above (`main.py`'s stdout-writer not yet built) — confirming it independently from the frontend/consumption side. Live `execution_started`/`llm_execution`/`tool_execution`/`completed`/`failed` events and real status transitions cannot be validated in the browser until this exists.
   * *Status*: Dashboard wiring complete and ready; full real-time validation blocked on `src/main.py`'s stdout-writer (Dinesh).
+
+## Day 9: Final V1 Completion & Process Boundary Event Exposure (2026-09-18)
+
+**Objective**: Complete the final V1 implementation across the Gateway/Orchestration boundary, resolve previously identified Watchdog/telemetry compatibility issues, and expose Python process-boundary events to the downstream API/Dashboard.
+
+* **Dinesh — Gateway / Orchestration / Event Boundary (Final V1 Implementation):**
+  * Investigated Sayan and Harshit's previous findings regarding the missing Python process-boundary event exposure. The `EventStream` was correctly dispatching events internally, but events were not leaving the Python process.
+  * Preserved the canonical Event schema and `EventStream` rules (Watchdog consumes only payload, no `Event` envelope).
+  * Added a `subscribe_event()` seam to `src/events/stream.py` to allow system-level listeners to receive the complete `Event` object for stdout streaming, without violating payload-only rules for domain subscribers.
+  * Implemented the stdout event streaming writer in `src/main.py`. The `EventStream` now serializes and outputs intermediate events live (`{"__type__": "Event", ...}`) to standard output, unblocking the Node.js API and telemetry dashboard.
+  * Verified end-to-end event ordering and `request_id`/`execution_id` semantics across the Gateway, Orchestrator, and StateManager. My V1 implementation scope is now fully completed and frozen.
+
+* **Koushik — Watchdog / Anomaly Detection (Minimal Integration Fix):**
+  * Addressed the previously identified compatibility issue where Watchdog alerts were generated but trapped within the Python process.
+  * Strictly preserved existing detection logic, thresholds, and Watchdog features.
+  * Modified `src/watchdog/detector.py`'s `attach_to_event_stream` binding to simply annotate the original `TOOL_EXECUTION` event payload with a `"watchdog_alert"` dictionary in-place.
+  * Swapped the subscriber execution order in `src/events/stream.py` to ensure domain payload subscribers execute before system-level event subscribers. This perfectly routes anomaly data into the integration flow without injecting arbitrary events or bypassing the strict `EventLifecycle` canonical schema.
+
+* **Sayan & Harshit:**
+  * No Day 9 work was performed. Their frontend, REST/WebSocket APIs, and telemetry dashboards remain unchanged, but are now structurally unblocked by Dinesh's `src/main.py` boundary implementation.
+
+* **Integration & Verification:**
+  * Python test suite passes perfectly, confirming the stdout writer, Watchdog alert publication, and event stream modifications did not introduce regressions.
+  * V1 Backend Core (Python) is now fully complete. All remaining V1 gaps lie exclusively in Sayan's and Harshit's pending real-time validations.
+  * Intentionally deferred all V2 work (e.g., Pathway migration, new Watchdog models, advanced telemetry).

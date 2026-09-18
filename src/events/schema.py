@@ -27,8 +27,9 @@ class Event:
     payload: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        event_type_val = self.event_type.value if hasattr(self.event_type, "value") else str(self.event_type)
         return {
-            "event_type": self.event_type.value,
+            "event_type": event_type_val,
             "request_id": self.request_id,
             "timestamp": self.timestamp,
             "payload": self.payload

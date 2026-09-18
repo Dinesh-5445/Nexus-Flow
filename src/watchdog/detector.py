@@ -18,7 +18,12 @@ class Watchdog:
         EventStream publishes Event objects, while the Watchdog consumes
         the Event.payload dictionary.
         """
-        event_stream.subscribe(self.process_event)
+        def subscriber(payload):
+            alert = self.process_event(payload)
+            if alert:
+                payload["watchdog_alert"] = alert
+
+        event_stream.subscribe(subscriber)
 
     def process_event(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(event, dict):
