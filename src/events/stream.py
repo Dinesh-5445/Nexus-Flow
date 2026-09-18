@@ -33,6 +33,7 @@ class EventStream:
     def __init__(self):
         self.published_events: List[Event] = []
         self._subscribers: List[PayloadSubscriber] = []
+        self._event_subscribers: List[Callable[[Event], None]] = []
 
     def subscribe(self, subscriber: PayloadSubscriber) -> None:
         """
@@ -43,6 +44,12 @@ class EventStream:
         """
         self._subscribers.append(subscriber)
 
+    def subscribe_event(self, subscriber: Callable[[Event], None]) -> None:
+        """
+        Register a callable that will be called with the full Event envelope on every publish.
+        """
+        self._event_subscribers.append(subscriber)
+
     async def publish(self, event: Event) -> None:
         """
         Publishes an event to the stream.
@@ -52,4 +59,6 @@ class EventStream:
         self.published_events.append(event)
         for subscriber in self._subscribers:
             subscriber(event.payload)
+        for subscriber in self._event_subscribers:
+            subscriber(event)
         # In a real implementation, this would send to Pathway or Kafka

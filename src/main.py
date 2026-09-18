@@ -29,12 +29,12 @@ async def run_gateway(req_data):
 
     # 4. Setup Watchdog (Subscriber seam)
     watchdog = Watchdog(repeated_call_threshold=5)
-    def on_event_payload(payload):
-        watchdog.process_event(payload)
-    event_stream.subscribe(on_event_payload)
+    watchdog.attach_to_event_stream(event_stream)
 
-    # (No API-specific interceptors or monkey patches here. The API or other consumers
-    # will consume events through the agreed boundary when integrated).
+    # 4b. Stream events to stdout for external boundary integration
+    def on_full_event(event):
+        print(json.dumps({"__type__": "Event", **event.to_dict()}), flush=True)
+    event_stream.subscribe_event(on_full_event)
 
     # 5. Initialize Orchestrator and GatewayRouter
     orchestrator = Orchestrator(
