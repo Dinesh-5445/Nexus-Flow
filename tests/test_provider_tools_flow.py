@@ -731,6 +731,233 @@ class TestProviderToolsFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_evts_b[1].payload["status"], "failed")
         self.assertIn("is not registered", tool_evts_b[1].payload["error"])
 
+    async def test_day9_final_v1_freeze_integration_and_isolation(self):
+        """G1. DAY 9 FINAL V1 VALIDATION AND FREEZE: Validates end-to-end success, failure, isolation, and Watchdog compatibility."""
+        from src.watchdog.detector import Watchdog
+
+        registry = ToolRegistry()
+        registry.register(CalculatorTool())
+        registry.register(EchoTool())
+        executor = ToolExecutor(registry)
+
+        # 1. Setup Stack
+        provider = MockProvider(
+            config=ProviderConfig(model_name="day9-v1-freeze-model"),
+            predefined_responses=[
+                # Request A: Successful multi-tool
+                LLMResponse(
+                    content="Executing dual tools for Day 9 Request A",
+                    tool_calls=[
+                        ToolCall(id="call_day9_A1", name="calculator", arguments={"expression": "25 * 4"}),
+                        ToolCall(id="call_day9_A2", name="echo", arguments={"message": "NexusFlow V1 Freeze"})
+                    ],
+                    model="day9-v1-freeze-model",
+                    finish_reason="tool_calls",
+                    usage={"prompt_tokens": 30, "completion_tokens": 40, "total_tokens": 70}
+                ),
+                # Request C: Tool failures (runtime division by zero + invalid arguments)
+                LLMResponse(
+                    content="Executing failing tools for Day 9 Request C",
+                    tool_calls=[
+                        ToolCall(id="call_day9_C1", name="calculator", arguments={"expression": "100 / 0"}),
+                        ToolCall(id="call_day9_C2", name="echo", arguments={"invalid_param": "test"})
+                    ],
+                    model="day9-v1-freeze-model",
+                    finish_reason="tool_calls",
+                    usage={"prompt_tokens": 20, "completion_tokens": 20, "total_tokens": 40}
+                ),
+                # Request D: Watchdog threshold trigger (5 calculator calls)
+                LLMResponse(
+                    content="Executing 5 tool calls for Watchdog trigger",
+                    tool_calls=[
+                        ToolCall(id=f"call_day9_D{i}", name="calculator", arguments={"expression": f"{i} + 1"})
+                        for i in range(1, 6)
+                    ],
+                    model="day9-v1-freeze-model",
+                    finish_reason="tool_calls"
+                )
+            ]
+        )
+        event_stream = EventStream()
+        state_manager = StateManager()
+        watchdog = Watchdog(repeated_call_threshold=5)
+        watchdog.attach_to_event_stream(event_stream)
+
+        orchestrator = Orchestrator(provider=provider, tool_executor=executor, event_stream=event_stream)
+        gateway = GatewayRouter(orchestrator=orchestrator, state_manager=state_manager, event_stream=event_stream)
+
+        # --- EXECUTION A: Success Path ---
+        req_a = GatewayRequest(
+            request_id="req-day9-A",
+            session_id="session-day9-A",
+            messages=[{"role": "user", "content": "Compute 25*4 and echo freeze message"}]
+        )
+        resp_a = await gateway.handle_request(req_a)
+
+        self.assertEqual(resp_a.status, "success")
+        self.assertEqual(resp_a.request_id, "req-day9-A")
+        self.assertEqual(resp_a.result["content"], "Executing dual tools for Day 9 Request A")
+        self.assertEqual(len(resp_a.result["tool_results"]), 2)
+        self.assertEqual(resp_a.result["tool_results"][0]["result"], {"expression": "25 * 4", "result": 100})
+        self.assertEqual(resp_a.result["tool_results"][0]["status"], "completed")
+        self.assertEqual(resp_a.result["tool_results"][1]["result"], {"echo": "NexusFlow V1 Freeze"})
+        self.assertEqual(resp_a.result["tool_results"][1]["status"], "completed")
+
+        # --- EXECUTION B: Provider Failure Path ---
+        class FailingProviderDay9(BaseLLMProvider):
+            async def generate(self, messages, tools=None, **kwargs):
+                raise ConnectionError("502 Bad Gateway: Provider service offline")
+
+        failing_provider = FailingProviderDay9(config=ProviderConfig(model_name="failing-model-day9"))
+        failing_orch = Orchestrator(provider=failing_provider, tool_executor=executor, event_stream=event_stream)
+        failing_gw = GatewayRouter(orchestrator=failing_orch, state_manager=state_manager, event_stream=event_stream)
+
+        req_b = GatewayRequest(
+            request_id="req-day9-B",
+            session_id="session-day9-B",
+            messages=[{"role": "user", "content": "Trigger provider failure"}]
+        )
+        resp_b = await failing_gw.handle_request(req_b)
+
+        self.assertEqual(resp_b.status, "failed")
+        self.assertEqual(resp_b.request_id, "req-day9-B")
+        self.assertIn("502 Bad Gateway", resp_b.error)
+        state_b = state_manager.get_state("req-day9-B")
+        self.assertIsNotNone(state_b)
+        self.assertEqual(state_b.status, "failed")
+
+        # --- EXECUTION C: Tool Failure Containment Path ---
+        req_c = GatewayRequest(
+            request_id="req-day9-C",
+            session_id="session-day9-C",
+            messages=[{"role": "user", "content": "Run failing calculations and invalid parameters"}]
+        )
+        resp_c = await gateway.handle_request(req_c)
+
+        self.assertEqual(resp_c.status, "success")
+        self.assertEqual(resp_c.request_id, "req-day9-C")
+        self.assertEqual(len(resp_c.result["tool_results"]), 2)
+        self.assertEqual(resp_c.result["tool_results"][0]["status"], "failed")
+        self.assertIn("division by zero", resp_c.result["tool_results"][0]["error"])
+        self.assertEqual(resp_c.result["tool_results"][1]["status"], "failed")
+        self.assertIn("Invalid tool arguments", resp_c.result["tool_results"][1]["error"])
+
+        # --- EXECUTION D: Watchdog Threshold Alert Trigger ---
+        req_d = GatewayRequest(
+            request_id="req-day9-D",
+            session_id="session-day9-D",
+            messages=[{"role": "user", "content": "Trigger repeated tool calls"}]
+        )
+        resp_d = await gateway.handle_request(req_d)
+
+        self.assertEqual(resp_d.status, "success")
+        self.assertEqual(len(resp_d.result["tool_results"]), 5)
+        # Verify Watchdog generated exactly 1 alert on the 5th tool call for req-day9-D
+        self.assertEqual(len(watchdog.alerts), 1)
+        self.assertEqual(watchdog.alerts[0]["request_id"], "req-day9-D")
+        self.assertEqual(watchdog.alerts[0]["anomaly_type"], "repeated_tool_call")
+        self.assertEqual(watchdog.alerts[0]["tool_name"], "calculator")
+        self.assertEqual(watchdog.alerts[0]["count"], 5)
+
+        # Verify Day 9 in-place annotation on event payload
+        tool_events_d = [
+            e for e in event_stream.published_events
+            if e.request_id == "req-day9-D" and e.event_type == EventLifecycle.TOOL_EXECUTION
+        ]
+        self.assertEqual(len(tool_events_d), 5)
+        for i in range(4):
+            self.assertNotIn("watchdog_alert", tool_events_d[i].payload)
+        self.assertIn("watchdog_alert", tool_events_d[4].payload)
+        self.assertEqual(tool_events_d[4].payload["watchdog_alert"]["count"], 5)
+
+        # --- CROSS-REQUEST ISOLATION VERIFICATION ---
+        call_ids_a = {r["tool_call_id"] for r in resp_a.result["tool_results"]}
+        call_ids_c = {r["tool_call_id"] for r in resp_c.result["tool_results"]}
+        call_ids_d = {r["tool_call_id"] for r in resp_d.result["tool_results"]}
+
+        self.assertEqual(call_ids_a, {"call_day9_A1", "call_day9_A2"})
+        self.assertEqual(call_ids_c, {"call_day9_C1", "call_day9_C2"})
+        self.assertEqual(call_ids_d, {f"call_day9_D{i}" for i in range(1, 6)})
+        self.assertTrue(call_ids_a.isdisjoint(call_ids_c))
+        self.assertTrue(call_ids_a.isdisjoint(call_ids_d))
+        self.assertTrue(call_ids_c.isdisjoint(call_ids_d))
+
+        for event in event_stream.published_events:
+            self.assertIn(event.request_id, {"req-day9-A", "req-day9-B", "req-day9-C", "req-day9-D"})
+            if "request_id" in event.payload:
+                self.assertEqual(event.payload["request_id"], event.request_id)
+
+    def test_provider_and_tool_interface_stability(self):
+        """G2. DAY 9 CONTRACT FREEZE: Verifies stability of all public Provider and Tool interfaces."""
+        # 1. ProviderConfig
+        config = ProviderConfig(
+            api_key="test-key",
+            model_name="custom-model",
+            temperature=0.5,
+            max_tokens=512,
+            timeout_seconds=15.0,
+            extra_params={"top_p": 0.9}
+        )
+        self.assertEqual(config.model_name, "custom-model")
+        self.assertEqual(config.temperature, 0.5)
+
+        # 2. ToolCall
+        tc = ToolCall(id="call_test", name="echo", arguments={"message": "hello"})
+        self.assertEqual(tc.id, "call_test")
+        self.assertEqual(tc.name, "echo")
+        self.assertEqual(tc.arguments, {"message": "hello"})
+
+        # 3. LLMMessage
+        msg = LLMMessage(role="user", content="hi", name="tester", tool_call_id="call_test")
+        self.assertEqual(msg.to_dict(), {
+            "role": "user",
+            "content": "hi",
+            "name": "tester",
+            "tool_call_id": "call_test"
+        })
+
+        # 4. LLMResponse
+        resp = LLMResponse(
+            content="test",
+            tool_calls=[tc],
+            model="custom-model",
+            finish_reason="tool_calls",
+            usage={"total_tokens": 10},
+            raw_response={"ok": True}
+        )
+        self.assertTrue(resp.has_tool_calls)
+        self.assertEqual(resp.finish_reason, "tool_calls")
+
+        # 5. BaseTool & Registry
+        registry = ToolRegistry()
+        calc = CalculatorTool()
+        echo = EchoTool()
+        registry.register(calc)
+        registry.register(echo)
+        self.assertTrue(registry.has("calculator"))
+        self.assertTrue(registry.has("echo"))
+        self.assertEqual(len(registry.list_tools()), 2)
+        schemas = registry.get_schemas()
+        self.assertEqual(len(schemas), 2)
+        self.assertEqual(schemas[0]["type"], "function")
+        self.assertEqual(schemas[1]["type"], "function")
+
+        # 6. ToolResult
+        res = ToolResult(
+            tool_call_id="call_test",
+            tool_name="echo",
+            status="completed",
+            result={"echo": "hello"},
+            error=None,
+            execution_time_ms=1.23
+        )
+        self.assertTrue(res.is_success)
+        d = res.to_dict()
+        self.assertEqual(set(d.keys()), {"tool_call_id", "tool_name", "status", "result", "error", "execution_time_ms"})
+        p = res.to_event_payload("req-1", "sess-1")
+        self.assertEqual(set(p.keys()), {"request_id", "event_type", "timestamp", "tool_name", "status", "session_id", "tool_call_id", "execution_time_ms", "error"})
+        self.assertEqual(p["event_type"], EventLifecycle.TOOL_EXECUTION.value)
+
 
 if __name__ == "__main__":
     unittest.main()
