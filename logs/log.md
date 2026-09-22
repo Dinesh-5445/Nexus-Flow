@@ -295,11 +295,22 @@ This file records the chronological implementation and development progress of t
   * Implemented the stdout event streaming writer in `src/main.py`. The `EventStream` now serializes and outputs intermediate events live (`{"__type__": "Event", ...}`) to standard output, unblocking the Node.js API and telemetry dashboard.
   * Verified end-to-end event ordering and `request_id`/`execution_id` semantics across the Gateway, Orchestrator, and StateManager. My V1 implementation scope is now fully completed and frozen.
 
-* **Koushik — Watchdog / Anomaly Detection (Minimal Integration Fix):**
-  * Addressed the previously identified compatibility issue where Watchdog alerts were generated but trapped within the Python process.
-  * Strictly preserved existing detection logic, thresholds, and Watchdog features.
-  * Modified `src/watchdog/detector.py`'s `attach_to_event_stream` binding to simply annotate the original `TOOL_EXECUTION` event payload with a `"watchdog_alert"` dictionary in-place.
-  * Swapped the subscriber execution order in `src/events/stream.py` to ensure domain payload subscribers execute before system-level event subscribers. This perfectly routes anomaly data into the integration flow without injecting arbitrary events or bypassing the strict `EventLifecycle` canonical schema.
+* **Koushik — Watchdog / Anomaly Detection (Final V1 Validation):**
+  * Completed final validation of `EventStream` → `Watchdog` integration against finalized V1 execution events (`EventLifecycle.TOOL_EXECUTION`).
+  * Validated that `Watchdog` subscribes via `attach_to_event_stream()` and consumes canonical `TOOL_EXECUTION` events published through the real `EventStream`.
+  * Verified repeated-tool-call detection logic (`Counter` tracking per `request_id`).
+  * Verified threshold behavior: calls below threshold ($N-1$) generate no alert; reaching threshold ($N$) triggers a `repeated_tool_call` alert.
+  * Verified execution/request isolation: independent `request_id` contexts maintain isolated tool history counts.
+  * Verified generated alert payloads match expected fields (`request_id`, `anomaly_type="repeated_tool_call"`, `tool_name`, `count`).
+  * Verified false-positive resistance against normal multi-tool sequences, interleaved lifecycle events, and failed tool calls below threshold.
+  * Actual Test Results:
+    * `python -m pytest tests/test_watchdog.py -v`: 9/9 passed
+    * `python -m pytest tests/test_eventstream_watchdog_integration.py -v`: 9/9 passed
+    * `python -m pytest -v`: 97/97 passed across full repository
+    * `python -m compileall src tests`: 0 compilation errors
+  * Scope & Boundaries: No new anomaly types introduced. Zero changes to Gateway, Provider/Tools, REST/WebSocket API, Frontend, or shared V1 event contract. Watchdog remains an independent monitoring subsystem.
+  * Implementation Status: Zero production-code changes required; existing implementation and tests fully satisfied all Day 9 validation requirements.
+  * Final Outcome: EventStream → Watchdog integration passed Day 9 final validation.
 
 * **Jyothi — LLM / Provider / Tool Execution (Final V1 Validation & Freeze):**
   * Completed final V1 validation of the Provider and Tool execution subsystem (`src/providers/`, `src/tools/`).
