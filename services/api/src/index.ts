@@ -41,12 +41,6 @@ app.post("/execute", async (req: Request, res: Response) => {
     stream_url: `/stream/${request_id}`,
   });
 
-  // Local bookkeeping event, fires immediately before the Python
-  // subprocess is even spawned. Python's own REQUEST_RECEIVED event
-  // (via onEvent below) will arrive shortly after — harmless duplicate,
-  // emitEvent's state update is idempotent.
-  emitEvent(request_id, "request_received");
-
   try {
     const gatewayRequest: GatewayRequest = {
       request_id, 
@@ -55,12 +49,12 @@ app.post("/execute", async (req: Request, res: Response) => {
       parameters,
     }
 
-    // Real intermediate + terminal events (execution_started,
-    // llm_execution, tool_execution, completed/failed) are published
-    // by the Gateway/Orchestrator inside the Python process and
-    // relayed here via onEvent as they happen — forwarded live by
-    // src/main.py's stdout-writer subscriber. Do NOT manually emit completed/failed after this resolves
-    // — Python already publishes those through onEvent.
+    // All lifecycle events (request_received, execution_started,
+    // llm_execution, tool_execution, completed/failed) are published by
+    // the Gateway/Orchestrator inside the Python process and relayed
+    // here via onEvent as they happen — forwarded live by src/main.py's
+    // stdout-writer subscriber. Python's EventStream is the single
+    // source of truth for this lifecycle; nothing is emitted locally.
     await forwardToGateway(gatewayRequest, (event) => {
       emitEvent(event.request_id, event.event_type, event.payload);
     });
@@ -172,9 +166,9 @@ const emitEvent = (requestId: string, eventType: EventLifecycle, payload?: Recor
 //   {"__type__": "GatewayResponse", request_id, status, ...}
 // Events are relayed live via onEvent as each line arrives; the final
 // GatewayResponse resolves the returned promise once the process exits.
-// Requires main.py to stream Event lines as they're published (not yet
-// built as of writing — see logs/log.md) — until then, only the
-// final GatewayResponse line will appear, no intermediate Event lines
+// main.py streams one Event line per published event (via
+// event_stream.subscribe_event()), relayed here live via onEvent, in
+// addition to the final GatewayResponse line printed once the process exits.
 const forwardToGateway = async ( request: GatewayRequest, onEvent: (event: ExecutionEvent) => void): Promise<GatewayResponse> => {
   return new Promise((resolve, reject) => {
     const rootDir = path.resolve(__dirname, "../../..");

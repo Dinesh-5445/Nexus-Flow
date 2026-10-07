@@ -324,8 +324,14 @@ This file records the chronological implementation and development progress of t
   * Verified all Provider/Tool focused tests (32/32 passing) and complete repository test suite (97/97 passing).
   * No production Provider/Tool code changes were required; existing implementation is 100% compatible, stable, and frozen for V1.
 
-* **Sayan & Harshit:**
-  * No Day 9 work was performed. Their frontend, REST/WebSocket APIs, and telemetry dashboards remain unchanged, but are now structurally unblocked by Dinesh's `src/main.py` boundary implementation.
+* **Sayan — REST / WebSocket API:**
+  * Validated full live Gateway integration end-to-end: `/execute` → real Python execution → live lifecycle events over WebSocket → correct `/status` state.
+  * Investigated failure-path testing; confirmed with Dinesh that `MockProvider`'s hardcoded calculator behavior is intentional for V1 — failure coverage lives at the Python unit-test level, not reachable via the live API.
+  * Fixed duplicate `request_received` event — removed local emission, Python's `EventStream` is now the sole source of truth for lifecycle events.
+  * API/WebSocket layer is V1-complete per Day 9 scope.
+
+* **Harshit:**
+  * No Day 9 work was performed. Their frontend, and telemetry dashboards remain unchanged, but are now structurally unblocked by Dinesh's `src/main.py` boundary implementation.
 
 * **Integration & Verification:**
   * Python test suite passes perfectly (97/97 tests passing), confirming the stdout writer, Watchdog alert publication, and event stream modifications did not introduce regressions.
