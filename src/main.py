@@ -54,7 +54,7 @@ async def run_gateway(req_data):
     response = await gateway.handle_request(request)
 
     # Finally, print the GatewayResponse to stdout
-    print(json.dumps({"__type__": "GatewayResponse", **response.__dict__}), flush=True)
+    print(json.dumps({"__type__": "GatewayResponse", **response.to_dict()}), flush=True)
 
 
 if __name__ == "__main__":
