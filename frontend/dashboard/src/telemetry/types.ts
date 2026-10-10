@@ -17,11 +17,8 @@
 // Day 8 fix: EventLifecycle here was missing LLM_EXECUTION, which
 // src/events/schema.py and src/orchestration/executor.py added back on Day 5
 // (lifecycle is REQUEST_RECEIVED -> EXECUTION_STARTED -> LLM_EXECUTION ->
-// TOOL_EXECUTION* -> COMPLETED/FAILED, per logs/log.md Day 5). Confirmed by
-// inspecting the current executor.py directly. Added below so the frontend
-// event union and status derivation stop silently mismatching the real
-// lifecycle once live events flow (see AlertsPanel/coordination notes for
-// why they don't reach the browser yet).
+// TOOL_EXECUTION* -> COMPLETED/FAILED, per logs/log.md Day 5). Added below so
+// the frontend event union matches the real lifecycle.
 //
 // TRANSPORT NOTE: Sayan's REST/WebSocket layer (services/api/src/index.ts)
 // is implemented today (POST /execute, GET /status/:id, WS /stream/:id) —
@@ -69,19 +66,18 @@ export interface LlmExecutionPayload {
  * Produced by ToolResult.to_event_payload() in src/tools/base.py, and is
  * also the exact shape Koushik's Watchdog consumes.
  *
- * KNOWN CONTRACT QUIRK (not resolved here, flagged as-is):
- * to_event_payload() nests its own `request_id`, `timestamp`, and a literal
- * `event_type: "tool_called"` inside the payload, which duplicates/conflicts
- * with the outer envelope's `request_id`/`timestamp`/`event_type` (the outer
- * event_type is EventLifecycle.TOOL_EXECUTION, not "tool_called"). Both
- * fields are kept below so the frontend representation matches the real
- * payload byte-for-byte. This should be raised with Dinesh/Koushik; the
- * frontend does not silently pick one interpretation over the other.
+ * Day 9 note: to_event_payload() still nests its own `request_id`, `timestamp`
+ * and `event_type` inside the payload, duplicating the outer envelope's
+ * fields. The nested `event_type` used to be the literal "tool_called"; the
+ * current src/tools/base.py emits EventLifecycle.TOOL_EXECUTION.value
+ * ("tool_execution"), which is also what the live wire shows, so it is typed
+ * that way here. The duplication itself is kept as-is to match the payload
+ * byte-for-byte.
  */
 export interface ToolExecutionPayload {
   request_id: string;
-  /** Literal string emitted by the backend today; see quirk note above. */
-  event_type: "tool_called";
+  /** Mirrors the outer envelope's event_type; see Day 9 note above. */
+  event_type: "tool_execution";
   timestamp: number;
   tool_name: string;
   status: "completed" | "failed";

@@ -1,10 +1,8 @@
-// Telemetry: Event-Consumption Hook
+// Telemetry: Event-Consumption Hook (mock path)
 //
-// Foundation hook for consuming a TelemetryEventSource from React. This is
-// intentionally not wired into DashboardLayout/App yet — today's task is the
-// consumption foundation, not the full dashboard. Panels can adopt this hook
-// (or a selector built on top of it) once the dashboard is ready to render
-// live data instead of placeholderData.ts.
+// Foundation hook for consuming a TelemetryEventSource from React. The
+// dashboard itself uses the live path (useExecutionRun / useLiveExecution);
+// this hook is kept for developing UI against mocked events with no backend.
 //
 // Defaults to MockEventSource so it works standalone with no real transport.
 // Pass a different `source` (e.g. a future WebSocketEventSource) to swap

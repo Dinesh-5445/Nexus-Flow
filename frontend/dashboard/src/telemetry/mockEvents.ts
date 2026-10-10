@@ -1,8 +1,9 @@
 // Telemetry: Mocked Events
 //
-// MOCK DATA ONLY. Do not depend on the real execution pipeline — Sayan's
-// REST/WebSocket layer (services/api) has no working /execute or
-// /stream/:execution_id yet, and there is no live event feed to connect to.
+// MOCK DATA ONLY. Does not depend on the real execution pipeline. The live
+// path (services/api: POST /execute, GET /status/:id, WS /stream/:id) is used
+// by the dashboard via useExecutionRun/useLiveExecution; this mock feed is
+// kept for developing UI without a running backend.
 //
 // These generators build a plausible sequence of GatewayEvents for a single
 // request, shaped exactly like the payloads the backend actually produces
@@ -94,7 +95,7 @@ export function createMockExecutionEvents(options: MockExecutionOptions = {}): G
       timestamp: t,
       payload: {
         request_id: requestId,
-        event_type: "tool_called",
+        event_type: "tool_execution",
         timestamp: t,
         tool_name: call.toolName,
         status,

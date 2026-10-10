@@ -7,8 +7,8 @@
 // (see EventSource.ts) so consumers don't care which source they're given.
 //
 // Emits `LiveGatewayEvent` (see liveTypes.ts), not the stricter `GatewayEvent`
-// from types.ts — that's the shape the server actually sends today (no
-// payload). See liveTypes.ts for the full contract-mismatch note.
+// from types.ts. Day 9: the server now includes `payload` on every event, but
+// it stays `unknown` here and is narrowed by livePayloads.ts.
 //
 // Dev note: a direct cross-origin `fetch("http://localhost:3000/execute")`
 // from the Vite dev server's origin is blocked by the browser, because
@@ -27,8 +27,13 @@ import { isLiveGatewayEvent } from "./liveTypes";
 export interface WebSocketEventSourceConfig {
   /** Full ws(s):// URL, or a path (e.g. "/stream/abc123") resolved against the current page origin. */
   url: string;
-  /** Called on socket errors or malformed/unparseable messages. Optional. */
+  /** Called on malformed/unparseable messages. Optional. */
   onError?: (error: unknown) => void;
+  /** Day 9: connection lifecycle callbacks. Never called after close(). */
+  onOpen?: () => void;
+  onClose?: () => void;
+  /** Called when the socket itself errors (connection refused, dropped, etc.). */
+  onSocketError?: (error: Error) => void;
 }
 
 export class WebSocketEventSource implements TelemetryEventSource<LiveGatewayEvent> {
@@ -62,6 +67,7 @@ export class WebSocketEventSource implements TelemetryEventSource<LiveGatewayEve
     this.socket = socket;
 
     socket.addEventListener("message", (evt) => {
+      if (this.closed) return;
       let parsed: unknown;
       try {
         parsed = JSON.parse(evt.data as string);
@@ -80,8 +86,19 @@ export class WebSocketEventSource implements TelemetryEventSource<LiveGatewayEve
       }
     });
 
+    socket.addEventListener("open", () => {
+      if (this.closed) return;
+      this.config.onOpen?.();
+    });
+
+    socket.addEventListener("close", () => {
+      if (this.closed) return;
+      this.config.onClose?.();
+    });
+
     socket.addEventListener("error", () => {
-      this.config.onError?.(new Error("WebSocket connection error"));
+      if (this.closed) return;
+      this.config.onSocketError?.(new Error("WebSocket connection error"));
     });
   }
 
