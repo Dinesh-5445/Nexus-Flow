@@ -11,10 +11,9 @@ interface DashboardLayoutProps {
   alerts: WatchdogAlert[];
 }
 
-// Day 8: session/events/metrics are now populated from live REST/WebSocket
-// data by App.tsx (via telemetry/useLiveExecution + telemetry/liveAdapters),
-// not data/placeholderData.ts. `alerts` is still placeholder ([]) — no
-// Watchdog alert endpoint exists on the API boundary yet.
+// Day 9: all four props are populated from live REST/WebSocket data by
+// App.tsx (telemetry/useExecutionRun + telemetry/liveAdapters). Alerts are the
+// Watchdog annotations carried on tool_execution event payloads.
 export default function DashboardLayout({
   session,
   events,
@@ -24,9 +23,9 @@ export default function DashboardLayout({
   return (
     <div className="dashboard-layout">
       <SessionPanel session={session} />
-      <EventStreamPanel events={events} />
       <MetricsPanel metrics={metrics} />
       <AlertsPanel alerts={alerts} />
+      <EventStreamPanel events={events} />
     </div>
   );
 }

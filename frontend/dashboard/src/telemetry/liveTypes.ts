@@ -1,38 +1,37 @@
 // Telemetry: Live Wire Event Shape (Day 3)
 //
-// Represents the ACTUAL shape of events emitted today by Sayan's now-working
-// services/api WebSocket stream (`/stream/:execution_id`), confirmed by
-// connecting a client to the running service and inspecting the raw JSON
-// (see experimental_log.md, Day 3 entry for the reproduction).
+// Represents the ACTUAL shape of events emitted by Sayan's services/api
+// WebSocket stream (`/stream/:execution_id`), confirmed by connecting a
+// client to the running service and inspecting the raw JSON.
 //
-// CONTRACT MISMATCH (flagged, not silently resolved):
-// The schema-accurate `GatewayEvent` in `./types.ts` was modeled on Dinesh's
-// Python event producers (src/events/schema.py, src/gateway/router.py,
-// src/orchestration/executor.py, src/tools/base.py) and requires a typed
-// `payload` for every event_type. `services/api/src/index.ts`'s
-// `simulateExecution()` calls `emitEvent(requestId, eventType)` with NO
-// payload argument for every lifecycle step, and `emitEvent` only includes a
-// `payload` key on the outgoing JSON at all when one is explicitly passed.
-// As a result, every event actually observed on `/stream/:execution_id`
-// today omits `payload` entirely, e.g.:
+// Day 9 update: the earlier mismatch (services/api's mocked execution sent no
+// `payload`) is resolved. Python's EventStream is now the single source of
+// lifecycle events (src/main.py stdout writer -> services/api onEvent ->
+// emitEvent), and every event on `/stream/:execution_id` carries its Python
+// `payload`, e.g.:
 //
-//   {"event_type":"request_received","request_id":"...","timestamp":...}
+//   {"event_type":"request_received","request_id":"...","timestamp":...,
+//    "payload":{"session_id":"...","messages_count":1}}
 //
-// This file defines the live wire shape as it actually is (payload optional
-// and untyped) instead of forcing it into the stricter GatewayEvent union or
-// inventing session_id/tool_name/etc. that was never sent. Worth raising
-// with Sayan (services/api's mock event emission carries no payload) and
-// Dinesh (the Python reference producers this Node service is meant to
-// mirror DO emit payloads, so the two currently diverge).
+// `payload` is still typed `unknown` here (per-event shapes are documented in
+// ./types.ts and narrowed by ./livePayloads.ts) rather than forcing the live
+// wire shape into the stricter GatewayEvent union.
 
 import { EventLifecycle, type ExecutionStatus } from "./types";
+
+/** State of the dashboard's WebSocket connection to /stream/:execution_id. */
+export type StreamConnection = "idle" | "connecting" | "open" | "closed" | "error";
 
 /** The event shape actually sent by services/api's /stream/:execution_id today. */
 export interface LiveGatewayEvent {
   event_type: EventLifecycle;
   request_id: string;
   timestamp: number;
-  /** Present in the shared schema/GatewayEvent contract; absent in practice today (see note above). */
+  /**
+   * Day 9: now present on every event relayed from Python (src/main.py's
+   * stdout writer -> services/api onEvent -> emitEvent). Kept `unknown`; use
+   * the readers in livePayloads.ts rather than casting.
+   */
   payload?: unknown;
 }
 
@@ -50,19 +49,7 @@ export function isLiveGatewayEvent(value: unknown): value is LiveGatewayEvent {
   );
 }
 
-// Day 4: Live Execution Status Shape
-//
-// Mirrors the `InternalExecutionState` Sayan added to services/api/src/types.ts
-// today and now returns from `GET /status/:execution_id`, which itself
-// mirrors `ExecutionState` from src/state/manager.py (request_id, status,
-// start_time, end_time, error). This is the AUTHORITATIVE per-request status
-// — see the note in useLiveExecution.ts on why the frontend now fetches this
-// instead of re-deriving status from the event stream with statusForEvent()
-// (types.ts): that local derivation had drifted from the backend's real
-// pending -> running -> completed/failed transitions (e.g. it treated
-// REQUEST_RECEIVED as "running", while the backend/state contract keeps a
-// request "pending" until EXECUTION_STARTED), which is exactly the kind of
-// backend-logic duplication the architecture rules call out to avoid.
+
 export interface LiveExecutionStatus {
   request_id: string;
   status: ExecutionStatus;

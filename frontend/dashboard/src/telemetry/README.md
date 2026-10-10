@@ -1,72 +1,88 @@
-# Telemetry / Event-Consumption Foundation
+# Telemetry / Event-Consumption
 
-Status: mock event-consumption foundation (`useTelemetryEvents.ts`) plus a
-real live-execution path (`useLiveExecution.ts`) wired to Sayan's working
-REST/WebSocket API. Rendered separately via `ExecutionMonitor.tsx`
-(`../components`) — not yet merged into `DashboardLayout.tsx`'s panels.
+Status (Day 9, V1): the dashboard renders live data from Sayan's REST/WebSocket
+API end to end. A mock path (`useTelemetryEvents.ts`) is kept for developing UI
+against mocked data with no backend.
 
-## Two representations, on purpose
+## Data flow
 
-- `types.ts` — the schema-accurate representation modeled directly on
-  Dinesh's Python contract (Event envelope + `EventLifecycle`, per-lifecycle
-  payloads, `ExecutionState.status` values). Used by the mock path.
-- `liveTypes.ts` — the representation of what `services/api` (Sayan) actually
-  sends/returns *today* over the wire: `LiveGatewayEvent` (events with no
-  `payload`, from `/stream/:execution_id`) and `LiveExecutionStatus`
-  (`InternalExecutionState`, from `GET /status/:execution_id`). Kept separate
-  from `types.ts` rather than forcing the live wire shape into the stricter
-  schema-accurate union — see the contract-mismatch notes in that file.
+```text
+Dashboard ── WS  /stream/:id  ──▶ lifecycle events (with payloads)
+          ── POST /execute    ──▶ starts an execution (202)
+          ── GET  /status/:id ──▶ authoritative status (InternalExecutionState)
+```
 
-## Mock path (`useTelemetryEvents.ts`)
+| Dashboard element | Source |
+|---|---|
+| Execution status, start/end time | `GET /status/:id` (authoritative; not derived from events) |
+| Lifecycle timeline, event summaries | `WS /stream/:id` events and their `payload` |
+| Request latency | `/status` `end_time − start_time` (API-side clock; includes gateway process startup) |
+| Pipeline time | last − first lifecycle event timestamp (Python clock) |
+| Event / tool activity | counts over received events; tool time = sum of `execution_time_ms` |
+| Watchdog alerts | `payload.watchdog_alert` on `tool_execution` events |
+| Execution error | `/status` `error`, else the `failed` event's `payload.error` |
 
-- Consumes `MockEventSource` (`mockEvents.ts`, `MockEventSource.ts`) via the
-  transport-agnostic `EventSource.ts` interface, with a `statusForEvent()`
-  status derived locally from `types.ts`'s `GatewayEvent`s.
-- Exists to exercise UI against mocked data with **no dependency on the real
-  execution pipeline**. Not wired into `useLiveExecution.ts` or
-  `ExecutionMonitor.tsx`.
+## Files
 
-## Live path (`useLiveExecution.ts`, Day 3–4)
+- `useExecutionRun.ts` — starts an execution. Opens the WebSocket **first**, then
+  sends `POST /execute` once the socket is open (services/api relays events only
+  to sockets connected at emit time, with no buffering or replay). Fails cleanly
+  if the stream can't open (5 s timeout) or `POST /execute` is rejected.
+- `useLiveExecution.ts` — per-execution state keyed by `request_id`: events,
+  stream connection state, authoritative status. Status is refreshed on every
+  event and polled (1.5 s) while non-terminal, so a dropped socket can't leave
+  the UI stuck on "pending".
+- `WebSocketEventSource.ts` — `TelemetryEventSource` over `/stream/:id`, with
+  open/close/error callbacks.
+- `liveTypes.ts` — wire shapes actually served today (`LiveGatewayEvent`,
+  `LiveExecutionStatus`) plus `StreamConnection`.
+- `livePayloads.ts` — structural readers that narrow `payload` (tool, LLM,
+  failed, Watchdog alert, …) without casting.
+- `liveAdapters.ts` — maps live state to the panel props in `../types.ts`
+  (session, events, metrics, alerts). Presentation only.
+- `executionScenarios.ts` — request bodies for the dashboard's scenario picker
+  (plain success, success with tool call, failure). See below.
+- `types.ts`, `mockEvents.ts`, `MockEventSource.ts`, `useTelemetryEvents.ts` —
+  schema-accurate representation and mock path (Day 2). Not used by the live path.
 
-- Subscribes to `/stream/:execution_id` via `WebSocketEventSource` for the
-  raw lifecycle event timeline.
-- Status, end time, and error come from `GET /status/:execution_id`
-  (Sayan's `InternalExecutionState`, mirroring `src/state/manager.py`'s
-  `ExecutionState`) — fetched on every new event — rather than being
-  re-derived on the frontend from the last-seen event type. An earlier
-  version of this hook did that local derivation with `statusForEvent()`;
-  it's kept in `types.ts` for the mock path but is no longer used for live
-  status, since it had drifted from the backend's real
-  pending/running/completed/failed transitions and duplicated backend-owned
-  logic on the frontend.
-- `ExecutionMonitor.tsx` (`../components`) is the minimal view built on this
-  hook: execution ID, authoritative status, total duration once terminal,
-  execution error, ordered lifecycle events, and stream/status connection
-  errors.
+## Watchdog alerts
 
-## Explicitly out of scope
+The Watchdog does not publish its own event. It annotates the triggering
+`tool_execution` payload in place (`payload.watchdog_alert = { request_id,
+anomaly_type, tool_name, count }`, `src/watchdog/detector.py`), and
+`src/main.py` serializes the event after payload subscribers have run, so the
+annotation reaches the browser on that same event. The alert has no timestamp of
+its own; the dashboard shows the carrying event's timestamp.
 
-- Wiring either path into `App.tsx` / `DashboardLayout.tsx` / the existing
-  panel components. Those still use `../types.ts` and
-  `../data/placeholderData.ts` (looser placeholder shapes) — reconciling the
-  two is a follow-up, not part of today's task.
-- Rendering event payloads in `ExecutionMonitor` — the live stream doesn't
-  send any today (see `liveTypes.ts`).
-- Visualizing tool-call sequences for the Watchdog's anomaly signals
-  (repeated calls, timeouts, loops) — that's dashboard/alert-visualization
-  work for a later session.
+With V1's `MockProvider` an execution makes at most one tool call, below the
+default threshold of 5, so alerts don't occur in a live run through the API.
+The alert path was validated by feeding real `EventStream` + `Watchdog` output
+(same wiring as `src/main.py`) through `liveAdapters.ts`.
+
+## Scenario picker
+
+The scenarios are validation inputs, not API contract. They depend on:
+`MockProvider` returning a calculator tool call when the last message contains
+"calculate", and the Orchestrator building `LLMMessage(**msg)` so a message
+without `content` raises and the Gateway publishes `failed`. If either changes,
+update `executionScenarios.ts`.
 
 ## Known contract notes
 
-- `ToolResult.to_event_payload()` (src/tools/base.py) nests its own
-  `request_id`, `timestamp`, and a literal `event_type: "tool_called"` inside
-  the `tool_execution` event's payload — separate from, and inconsistent
-  with, the outer envelope's `event_type` (`EventLifecycle.TOOL_EXECUTION`).
-  This frontend representation (`ToolExecutionPayload` in `types.ts`) mirrors
-  the payload exactly as produced rather than silently normalizing it. Worth
-  raising with Dinesh/Jyothi/Koushik since the Watchdog also relies on this
-  shape.
-- `services/api`'s `simulateExecution()` still emits every lifecycle event
-  with no `payload` (see `liveTypes.ts`), so `LiveGatewayEvent.payload` stays
-  optional/untyped rather than the stricter `GatewayEvent` union in
-  `types.ts`. Worth raising with Sayan/Dinesh.
+- `GET /status/:id` does not include `error` for a failed execution
+  (`emitEvent` in `services/api/src/index.ts` sets status and `end_time` but
+  doesn't copy `payload.error` into the state). The dashboard falls back to the
+  `failed` event's payload. Worth raising with Sayan.
+- `ToolResult.to_event_payload()` nests its own `request_id`, `timestamp` and
+  `event_type` inside the payload (now `"tool_execution"`, previously
+  `"tool_called"`), duplicating the outer envelope. Kept as-is.
+- `services/api` sends no CORS headers; the dashboard relies on the Vite dev
+  proxy (`vite.config.ts`). A real deployment still needs a CORS/proxy decision
+  from Sayan.
+
+## Out of scope
+
+- Aggregate / cross-execution telemetry (throughput over time, history) — no
+  endpoint exists; the dashboard tracks one execution at a time.
+- Automatic WebSocket reconnect and event replay — needs buffering in
+  `services/api`.

@@ -1,54 +1,97 @@
-// Telemetry: Live Execution Hook (Day 3, status contract finalized Day 4)
+// Telemetry: Live Execution Hook (Day 3, status contract Day 4, hardened Day 9)
 //
 // Consumes a single execution's real event stream from services/api via
-// WebSocketEventSource. This is the "start consuming Sayan's working
-// REST/WebSocket event stream" half of today's task; ExecutionMonitor.tsx
-// (in ../components) is the "minimal execution-status/event view" half.
+// WebSocketEventSource and tracks its authoritative status from
+// GET /status/:execution_id (Sayan's InternalExecutionState, mirroring
+// src/state/manager.py's ExecutionState).
 //
-// Deliberately separate from useTelemetryEvents.ts (Day 2), which still
-// defaults to MockEventSource / GatewayEvent and remains useful for
-// exercising UI against mocked data with no backend dependency. Reconciling
-// the two into one hook is a later step, not part of today's scope.
+// Day 4 contract (unchanged): `status`, `endedAt` come from /status, not from
+// a local derivation over event types — that would duplicate backend-owned
+// logic on the frontend.
 //
-// Day 4: `status` (plus `endedAt`/`error`) now comes from GET
-// /status/:execution_id — Sayan's InternalExecutionState, mirroring
-// src/state/manager.py's ExecutionState contract — instead of being derived
-// locally from the last-seen event via statusForEvent(). That local
-// derivation had drifted from the backend's real status vocabulary (see
-// liveTypes.ts's LiveExecutionStatus doc comment) and duplicated
-// backend-owned business logic on the frontend, which the project's
-// architecture rules call out to avoid. The event stream is still consumed
-// directly for the raw lifecycle timeline; only the authoritative
-// pending/running/completed/failed status is now sourced from /status.
+// Day 9 changes:
+//  - Exposes the WebSocket `connection` state so callers can open the stream
+//    BEFORE submitting POST /execute (services/api only relays events to
+//    sockets connected at emit time and does not buffer/replay).
+//  - Status is refreshed on every new event AND polled while the execution is
+//    non-terminal (Sayan's documented polling fallback), so a dropped socket or
+//    a missed event can't leave the dashboard stuck on "pending".
+//  - All per-execution state is keyed by request_id, so switching to a new
+//    execution never shows (or lets a late response write) the previous
+//    execution's data.
+//  - `error` falls back to the `failed` event's payload.error: services/api
+//    records a failed status but does not copy the error message into
+//    GET /status (verified against the running service), while the failed
+//    event itself carries it.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { WebSocketEventSource } from "./WebSocketEventSource";
-import type { LiveGatewayEvent, LiveExecutionStatus } from "./liveTypes";
+import type { LiveGatewayEvent, LiveExecutionStatus, StreamConnection } from "./liveTypes";
 import { isLiveExecutionStatus } from "./liveTypes";
 import type { ExecutionStatus } from "./types";
+import { readFailedError } from "./livePayloads";
+
+/** How often the authoritative status is re-fetched while non-terminal. */
+const STATUS_POLL_MS = 1500;
 
 export interface LiveExecutionState {
   requestId: string;
   status: ExecutionStatus;
   /** Lifecycle events observed so far, oldest first. */
   events: LiveGatewayEvent[];
-  /** Timestamp (seconds, matching the backend's time.time()) of the first observed event. */
+  /** `start_time` from the authoritative status (API-side clock), once fetched. */
   startedAt: number | null;
+  /** Timestamp (seconds, Python clock) of the first observed event. */
+  firstEventAt: number | null;
   /** Timestamp of the most recent observed event. */
   lastEventAt: number | null;
   /** `end_time` from the authoritative status, once execution reaches a terminal state. */
   endedAt: number | null;
-  /** `error` from the authoritative status, if the execution failed. */
+  /** Execution error: `/status` error, else the `failed` event's payload.error. */
   error: string | null;
+  /** WebSocket connection state for /stream/:requestId. */
+  connection: StreamConnection;
   /** Set when the WebSocket connection itself fails or sends a malformed message. */
   connectionError: string | null;
   /** Set when GET /status/:requestId fails or returns an unexpected shape. */
   statusError: string | null;
 }
 
+export interface UseLiveExecutionOptions {
+  /**
+   * Whether POST /execute has been accepted. /status is only requested once
+   * this is true (or an event has already arrived), because the API returns
+   * 404 for an execution_id it hasn't seen yet. Defaults to true.
+   */
+  submitted?: boolean;
+}
+
+interface Tracked {
+  id: string | null;
+  events: LiveGatewayEvent[];
+  connection: StreamConnection;
+  connectionError: string | null;
+  status: LiveExecutionStatus | null;
+  statusError: string | null;
+}
+
+function freshFor(id: string | null): Tracked {
+  return {
+    id,
+    events: [],
+    connection: id === null ? "idle" : "connecting",
+    connectionError: null,
+    status: null,
+    statusError: null,
+  };
+}
+
+export function isTerminalStatus(status: ExecutionStatus | undefined): boolean {
+  return status === "completed" || status === "failed";
+}
+
 async function fetchExecutionStatus(requestId: string): Promise<LiveExecutionStatus> {
-  // Relative URL so this goes through the Vite dev proxy (vite.config.ts),
-  // same reasoning as ExecutionMonitor's POST /execute call.
+  // Relative URL so this goes through the Vite dev proxy (vite.config.ts).
   const res = await fetch(`/status/${requestId}`);
   if (!res.ok) {
     throw new Error(`GET /status/${requestId} failed with status ${res.status}`);
@@ -62,78 +105,114 @@ async function fetchExecutionStatus(requestId: string): Promise<LiveExecutionSta
 
 /**
  * Subscribes to `/stream/:requestId` for as long as a non-null `requestId`
- * is passed, accumulating the raw lifecycle events, and polls the
- * authoritative `/status/:requestId` state whenever a new event arrives.
- * Pass `null` to stay idle (e.g. before an execution has been started).
+ * is passed, accumulating the raw lifecycle events, and keeps the
+ * authoritative `/status/:requestId` state fresh. Pass `null` to stay idle.
  */
-export function useLiveExecution(requestId: string | null): LiveExecutionState {
-  const [events, setEvents] = useState<LiveGatewayEvent[]>([]);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [status, setStatus] = useState<LiveExecutionStatus | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const sourceRef = useRef<WebSocketEventSource | null>(null);
+export function useLiveExecution(
+  requestId: string | null,
+  options: UseLiveExecutionOptions = {}
+): LiveExecutionState {
+  const { submitted = true } = options;
+  const [tracked, setTracked] = useState<Tracked>(() => freshFor(null));
+  const statusSeq = useRef(0);
+
+  // State recorded for a different request_id is never shown: until the
+  // effect below resets it, the view is derived as a fresh state.
+  const view = tracked.id === requestId ? tracked : freshFor(requestId);
+
+  const patch = useCallback((id: string, update: (t: Tracked) => Tracked) => {
+    setTracked((prev) => (prev.id === id ? update(prev) : prev));
+  }, []);
 
   useEffect(() => {
-    setEvents([]);
-    setConnectionError(null);
-    setStatus(null);
-    setStatusError(null);
+    setTracked(freshFor(requestId));
 
     if (!requestId) {
       return;
     }
+    const id = requestId;
 
     const source = new WebSocketEventSource({
-      url: `/stream/${requestId}`,
-      onError: (err) => setConnectionError(err instanceof Error ? err.message : String(err)),
+      url: `/stream/${id}`,
+      onOpen: () => patch(id, (t) => ({ ...t, connection: "open" })),
+      onClose: () =>
+        patch(id, (t) => ({ ...t, connection: t.connection === "error" ? "error" : "closed" })),
+      onSocketError: (err) =>
+        patch(id, (t) => ({ ...t, connection: "error", connectionError: err.message })),
+      onError: (err) =>
+        patch(id, (t) => ({
+          ...t,
+          connectionError: err instanceof Error ? err.message : String(err),
+        })),
     });
-    sourceRef.current = source;
 
     const unsubscribe = source.subscribe((event) => {
-      setEvents((prev) => [...prev, event]);
+      patch(id, (t) => ({ ...t, events: [...t.events, event] }));
     });
 
     return () => {
       unsubscribe();
       source.close();
-      sourceRef.current = null;
     };
-  }, [requestId]);
+  }, [requestId, patch]);
 
-  // Re-fetch the authoritative status whenever a new lifecycle event arrives.
-  // There's no push-based status update from the backend today, so an
-  // incoming event is the frontend's only signal that server-side state may
-  // have changed; this also fetches once immediately on start (events.length
-  // transitions from N/A to 0).
+  const refreshStatus = useCallback(
+    async (id: string) => {
+      const seq = ++statusSeq.current;
+      try {
+        const next = await fetchExecutionStatus(id);
+        // Drop responses that were superseded by a newer request.
+        if (seq === statusSeq.current) {
+          patch(id, (t) => ({ ...t, status: next, statusError: null }));
+        }
+      } catch (err) {
+        if (seq === statusSeq.current) {
+          patch(id, (t) => ({
+            ...t,
+            statusError: err instanceof Error ? err.message : String(err),
+          }));
+        }
+      }
+    },
+    [patch]
+  );
+
+  const eventCount = view.events.length;
+  const canFetchStatus = requestId !== null && (submitted || eventCount > 0);
+  const terminal = isTerminalStatus(view.status?.status);
+
+  // Re-fetch the authoritative status whenever a new lifecycle event arrives
+  // (and once as soon as the request has been submitted).
   useEffect(() => {
-    if (!requestId) {
+    if (requestId && canFetchStatus) {
+      void refreshStatus(requestId);
+    }
+  }, [requestId, canFetchStatus, eventCount, refreshStatus]);
+
+  // Polling fallback while the execution is non-terminal.
+  useEffect(() => {
+    if (!requestId || !canFetchStatus || terminal) {
       return;
     }
-    let cancelled = false;
-    fetchExecutionStatus(requestId)
-      .then((s) => {
-        if (!cancelled) setStatus(s);
-      })
-      .catch((err) => {
-        if (!cancelled) setStatusError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [requestId, events.length]);
+    const timer = setInterval(() => void refreshStatus(requestId), STATUS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [requestId, canFetchStatus, terminal, refreshStatus]);
 
-  const startedAt = events.length > 0 ? events[0].timestamp : null;
-  const lastEventAt = events.length > 0 ? events[events.length - 1].timestamp : null;
+  const failedEvent = view.events.find((e) => e.event_type === "failed");
+  const firstEventAt = eventCount > 0 ? view.events[0].timestamp : null;
+  const lastEventAt = eventCount > 0 ? view.events[eventCount - 1].timestamp : null;
 
   return {
     requestId: requestId ?? "",
-    status: status?.status ?? "pending",
-    events,
-    startedAt,
+    status: view.status?.status ?? "pending",
+    events: view.events,
+    startedAt: view.status?.start_time ?? null,
+    firstEventAt,
     lastEventAt,
-    endedAt: status?.end_time ?? null,
-    error: status?.error ?? null,
-    connectionError,
-    statusError,
+    endedAt: view.status?.end_time ?? null,
+    error: view.status?.error ?? (failedEvent ? readFailedError(failedEvent.payload) : null),
+    connection: view.connection,
+    connectionError: view.connectionError,
+    statusError: view.statusError,
   };
 }

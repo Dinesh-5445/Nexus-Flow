@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import "./styles.css";
 
 // Day 8: minimal Vite entry point. None existed in the repository yet
 // (only App.tsx/DashboardLayout.tsx and their panels), so the dashboard
